@@ -1,10 +1,7 @@
 /.idea
 /tmp_build
-/.devcontainer
 /output
 /.claude
-
-Dockerfile
 
 /include/config.h
 /interface/framework/dstore_io_event.h

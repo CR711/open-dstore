@@ -1,0 +1,39 @@
+{
+  "name": "dstore",
+
+  // Use the pre-built image directly — no rebuild on every open.
+  // To rebuild: docker build -t dstore:latest . (in the dstore/ directory)
+  "image": "dstore:latest",
+
+  // Where CLion opens the project inside the container
+  "workspaceFolder": "/opt/project/dstore",
+
+  // Map the source from your Mac into the container so edits are reflected live.
+  // Remove this if you want to work purely on the copy baked into the image.
+  "workspaceMount": "source=${localWorkspaceFolder},target=/opt/project/dstore,type=bind,consistency=cached",
+
+  // Keep the container alive (overrides the image's own CMD)
+  "overrideCommand": true,
+
+  // Environment variables available to CLion and all terminals inside the container
+  "remoteEnv": {
+    "BUILD_ROOT": "/opt/project/dstore",
+    "LOCAL_LIB_PATH": "/opt/project/local_libs",
+    "GCC_VERNAME": "gcc7.3",
+    "GCC_VERSION": "7.3.0",
+    "GCCFOLDER": "/opt/project/local_libs/buildtools/gcc7.3",
+    "CC": "/opt/project/local_libs/buildtools/gcc7.3/gcc/bin/gcc",
+    "CXX": "/opt/project/local_libs/buildtools/gcc7.3/gcc/bin/g++",
+    "PATH": "/opt/project/local_libs/buildtools/gcc7.3/gcc/bin:${containerEnv:PATH}",
+    "LD_LIBRARY_PATH": "/opt/project/local_libs/buildtools/gcc7.3/gcc/lib64:/opt/project/local_libs/buildtools/gcc7.3/isl/lib:/opt/project/local_libs/buildtools/gcc7.3/mpc/lib:/opt/project/local_libs/buildtools/gcc7.3/mpfr/lib:/opt/project/local_libs/buildtools/gcc7.3/gmp/lib:/opt/project/local_libs/lz4/lib:/opt/project/local_libs/cjson/lib:/opt/project/local_libs/secure/lib"
+  },
+
+  // CMake options CLion uses when configuring the project
+  "customizations": {
+    "jetbrains": {
+      "settings": {
+        "cmake.options": "-DLOCAL_LIB_PATH=/opt/project/local_libs"
+      }
+    }
+  }
+}
