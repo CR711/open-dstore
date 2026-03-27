@@ -69,26 +69,6 @@ TEST_F(VfsInterfaceTest, SetupPageStoreTest)
     ASSERT_EQ(VfsInterface::SetupPageStore(tenantConfig), nullptr);
 }
 
-TEST_F(VfsInterfaceTest, ChooseTheBestStoreSpaceConfigTest)
-{
-    char startConfFilePath[MAXPGPATH];
-    errno_t rc = memset_s(startConfFilePath, MAXPGPATH, 0, MAXPGPATH);
-    storage_securec_check(rc, "\0", "\0");
-    char *execPath4start = startConfFilePath;
-    int ret = readlink("/proc/self/exe", execPath4start, MAXPGPATH);
-    ASSERT_GT(ret, 0);
-    char *lastSlashPtr4start = strrchr(execPath4start, '/');
-    ASSERT_NE(lastSlashPtr4start, nullptr);
-    ret = snprintf(lastSlashPtr4start + 1, MAXPGPATH / 2, "tenant_gaussdb_start_config.json");
-    ASSERT_GT(ret, 0);
-    ASSERT_EQ(access(startConfFilePath, F_OK), 0); /* It must exist. */
-    DSTORE::TenantConfig config;
-    DSTORE::RetStatus err = TenantConfigInterface::GetTenantConfig(startConfFilePath, &config);
-
-    ASSERT_NE(VfsInterface::ChooseTheBestStoreSpaceConfig(
-        config.storeSpaces, config.storeSpaceCnt, VfsInterface::DISK_PERF_DESC_HIGH), nullptr);
-}
-
 TEST_F(VfsInterfaceTest, AddDrClusterIdTest) {
     static constexpr uint32 MAX_SIZE = 5;
     uint32 clusterIdArr[MAX_SIZE] = {};

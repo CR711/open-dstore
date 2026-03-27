@@ -1,7 +1,8 @@
-/.idea
-/tmp_build
-/output
-/.claude
+.idea
+.claude
+.DS_Store
+tmp_build
+output
 
 /include/config.h
 /interface/framework/dstore_io_event.h
@@ -14,4 +15,5 @@
 /utils/scripts/makeutils.log
 build_script/dynamic_vfs.conf.init
 build_script/guc.json
+build_script/dstore_conf.json
 tests/unittest/ut_config/ut_isoland_start.json

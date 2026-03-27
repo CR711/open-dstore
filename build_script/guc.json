@@ -122,7 +122,7 @@
     "clusterId" : 1,
     "enableQuickStartUp true": "",
     "enableQuickStartUp": true,
-    "startConfigPath": "/opt/project/dstore/tests/tpcctest/../../build_script/dstore_conf.json",
+    "startConfigPath": "/opt/project/dstore/tests/unittest/ut_config/ut_isoland_start.json",
     "bgDiskWriterSlaveNum" : 1,
     "bgPageWriterSleepMilliSecond" : 2000,
     "walThrottlingSize" : 1048576,

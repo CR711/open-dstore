@@ -807,6 +807,7 @@ RetStatus BufMgr::ConsistentReadInternal(ConsistentReadContext &crContext, bool 
     uint64 lastestPageWriteTime = baseBufDesc->GetLastModifyTime();
     UnlockContent(baseBufDesc);
 
+    FAULT_INJECTION_NOTIFY(DstoreHeapFI::CONSTRUCT_CR_AFTER_READ_BASE_PAGE);
     FAULT_INJECTION_WAIT(DstoreHeapFI::CONSTRUCT_CR_PAGE);
 
     /* Step 4: Construct a cr page that match with given snapshot. */

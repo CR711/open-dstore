@@ -26,14 +26,5 @@
     "CXX": "/opt/project/local_libs/buildtools/gcc7.3/gcc/bin/g++",
     "PATH": "/opt/project/local_libs/buildtools/gcc7.3/gcc/bin:${containerEnv:PATH}",
     "LD_LIBRARY_PATH": "/opt/project/local_libs/buildtools/gcc7.3/gcc/lib64:/opt/project/local_libs/buildtools/gcc7.3/isl/lib:/opt/project/local_libs/buildtools/gcc7.3/mpc/lib:/opt/project/local_libs/buildtools/gcc7.3/mpfr/lib:/opt/project/local_libs/buildtools/gcc7.3/gmp/lib:/opt/project/local_libs/lz4/lib:/opt/project/local_libs/cjson/lib:/opt/project/local_libs/secure/lib"
-  },
-
-  // CMake options CLion uses when configuring the project
-  "customizations": {
-    "jetbrains": {
-      "settings": {
-        "cmake.options": "-DLOCAL_LIB_PATH=/opt/project/local_libs"
-      }
-    }
   }
 }

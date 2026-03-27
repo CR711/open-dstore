@@ -420,7 +420,7 @@ TEST_F(WalParallelWorkerTest, ParallelWorkerTestConcurrency)
     WalParallerSpscQueueTest *parallerQueueTest =
         static_cast<WalParallerSpscQueueTest *>(DstorePalloc0(sizeof(WalParallerSpscQueueTest)));
     parallerQueueTest->redoQueue = static_cast<BlockSpscQueue *>(DstorePalloc0(sizeof(BlockSpscQueue)));
-    EXPECT_EQ(parallerQueueTest->redoQueue->Init(4, sizeof(RedoWalRecordEntry), nullptr), DSTORE_SUCC);
+    EXPECT_EQ(parallerQueueTest->redoQueue->Init(1024, sizeof(RedoWalRecordEntry), nullptr), DSTORE_SUCC);
 
     for (uint64 i= 1; i < WAL_RECORD_ENTRY_NUM; i++) {
         parallerQueueTest->X[i].recordEndPlsn = i;

@@ -52,22 +52,27 @@ protected:
 
         m_utTableHandler = UTTableHandler::CreateTableHandler(g_defaultPdbId, m_ut_memory_context, true);
 
-        StorageRelationData tmpRel;
         segment = dynamic_cast<HeapNormalSegment *>(m_utTableHandler->GetHeapTabSmgr()->GetSegment());
-        tmpRel.tableSmgr = DstoreNew(m_ut_memory_context)
+        m_storageRelationData = new StorageRelationData();
+        m_storageRelationData->tableSmgr = DstoreNew(m_ut_memory_context)
             TableStorageMgr(segment->GetPdbId(), DEFAULT_HEAP_FILLFACTOR, nullptr, SYS_RELPERSISTENCE_PERMANENT);
 
-        tmpRel.lobTableSmgr = DstoreNew(m_ut_memory_context)
+        m_storageRelationData->lobTableSmgr = DstoreNew(m_ut_memory_context)
             TableStorageMgr(segment->GetPdbId(), DEFAULT_HEAP_FILLFACTOR, nullptr, SYS_RELPERSISTENCE_PERMANENT);
 
-        tmpRel.SetTableSmgrSegment(dynamic_cast<HeapSegment *>(segment));
+        m_storageRelationData->SetTableSmgrSegment(dynamic_cast<HeapSegment *>(segment));
+
+        m_storageRelationData->btreeSmgr = DstoreNew(m_ut_memory_context)
+            BtreeStorageMgr(segment->GetPdbId(), DEFAULT_HEAP_FILLFACTOR, SYS_RELPERSISTENCE_PERMANENT);
 
         tupleDesc = m_utTableHandler->GetHeapTupDesc();
-        m_storageRelationData = &tmpRel;
     }
 
     void TearDown() override
     {
+        delete m_storageRelationData;
+        m_storageRelationData = nullptr;
+
         UTTableHandler::Destroy(m_utTableHandler);
         m_utTableHandler = nullptr;
 

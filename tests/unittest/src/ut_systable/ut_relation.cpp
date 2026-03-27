@@ -20,6 +20,7 @@
 #include "systable/dstore_relation.h"
 #include "tablespace/dstore_heap_normal_segment.h"
 #include "tablespace/dstore_heap_segment.h"
+#include "index/dstore_btree.h"
 
 /**
 * @tc.name  : SetTableSmgrSegment_ShouldSetSegment_WhenSegmentIsValid

@@ -26,6 +26,7 @@
 #include "common/dstore_datatype.h"
 #include "errorcode/dstore_error_struct.h"
 #include "common/memory/dstore_mctx.h"
+#include "framework/dstore_thread.h"
 
 namespace DSTORE {
 
@@ -74,21 +75,62 @@ private:
     NodeId        m_errorNodeId = 0;
 };
 
-extern void StorageSetError(const char *fileName, int lineNumber, const char *functionName, ErrorCode errorCode, ...);
-#define storage_set_error(...)  StorageSetError(__FILE__, __LINE__, __FUNCTION__, __VA_ARGS__);
+#define storage_set_error(...)                                              \
+    if (thrd != nullptr && thrd->error != nullptr) {                        \
+    thrd->error->SetError(__FILE__, __LINE__, __FUNCTION__, __VA_ARGS__);   \
+}
 
-void StorageSetErrorWithNodeId(const char *fileName, int lineNumber, const char *functionName, NodeId nodeId,
-                                   ErrorCode errorCode, ...);
-#define storage_set_error_with_nodeId(nodeId, ...)  StorageSetErrorWithNodeId(__FILE__, __LINE__, __FUNCTION__, nodeId, __VA_ARGS__); 
+#define storage_set_error_with_nodeId(nodeId, ...)                                          \
+    if (thrd != nullptr && thrd->error != nullptr) {                                        \
+    thrd->error->SetErrorWithNodeId(__FILE__, __LINE__, __FUNCTION__, nodeId, __VA_ARGS__); \
+}
+inline void StorageClearError()
+{
+    Error *error = thrd->error;
+    if (error->GetErrorCode() != STORAGE_OK) {
+        error->ClearError();
+    }
+}
 
-extern void StorageClearError();
-extern bool StorageIsErrorSet();
-extern ErrorCode StorageGetErrorCode();
-extern const char *StorageGetErrorName();
-extern void StorageSetErrorCodeOnly(ErrorCode errcode);
-extern const char *StorageGetMessage();
-extern void StorageGetFunctionName(const char *&functionName);
-extern NodeId StorageGetErrorNodeId();
+inline void StorageSetErrorCodeOnly(ErrorCode errcode)
+{
+    thrd->error->SetErrorCodeOnly(errcode);
+}
+
+inline const char *StorageGetMessage()
+{
+    return thrd->error->GetMessage();
+}
+
+inline ErrorCode StorageGetErrorCode()
+{
+    return thrd->error->GetErrorCode();
+}
+
+inline const char *StorageGetErrorName()
+{
+    return thrd->error->GetErrorName();
+}
+
+inline bool StorageHasError(ErrorCode e)
+{
+    return e != STORAGE_OK;
+}
+
+inline bool StorageIsErrorSet()
+{
+    return thrd->error->GetErrorCode() != STORAGE_OK;
+}
+
+inline void StorageGetFunctionName(const char *&functionName)
+{
+    thrd->error->GetFunctionName(functionName);
+}
+
+inline NodeId StorageGetErrorNodeId()
+{
+    return thrd->error->GetErrorNodeId();
+}
 
 } /* namespace DSTORE */
 

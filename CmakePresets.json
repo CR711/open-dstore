@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "configurePresets": [
+    {
+      "name": "Devcontainer-Debug",
+      "displayName": "Dev Container (GCC 7.3)",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/tmp_build",
+      "cacheVariables": {
+        "LOCAL_LIB_PATH": "/opt/project/local_libs",
+        "CMAKE_C_COMPILER": "/opt/project/local_libs/buildtools/gcc7.3/gcc/bin/gcc",
+        "CMAKE_CXX_COMPILER": "/opt/project/local_libs/buildtools/gcc7.3/gcc/bin/g++",
+        "ENABLE_UT": "ON"
+      }
+    }
+  ]
+}

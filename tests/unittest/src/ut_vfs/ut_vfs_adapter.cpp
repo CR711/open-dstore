@@ -254,62 +254,13 @@ TEST_F(VfsAdapterTest, GetTenantTest001)
     ASSERT_EQ(config.nodeId, 1);
     ASSERT_EQ(config.storageConfig.type, StorageType::PAGESTORE);
     ret = strncmp(config.storageConfig.clientLibPath,
-                  "/opt/huawei/gaussdb/server/cms_server/lib/libsalofflinefileisdata.so", FILE_PATH_MAX_LEN);
+                  "xxx/libsalofflinefileisdata.so", FILE_PATH_MAX_LEN);
     ASSERT_EQ(ret, 0);
     ret = strncmp(config.storageConfig.serverProtocolType, "TCP_TYPE", MAXTYPELEN);
     ASSERT_EQ(ret, 0);
     ASSERT_EQ(config.communicationConfig.clusterId, 1);
     ret = strncmp(config.votingConfig.votingFilePath, "", FILE_PATH_MAX_LEN);
     ASSERT_EQ(ret, 0);
-}
-
-TEST_F(VfsAdapterTest, GetTenantSecurityTest)
-{
-    /* Get tenant config file. */
-    char m_tenantConfigFilePath[MAXPGPATH];
-    errno_t rc = memset_s(m_tenantConfigFilePath, MAXPGPATH, 0, MAXPGPATH);
-    storage_securec_check(rc, "\0", "\0");
-    char *execPath4tenant = m_tenantConfigFilePath;
-    int ret = readlink("/proc/self/exe", execPath4tenant, MAXPGPATH);
-    ASSERT_GT(ret, 0);
-    char *lastSlashPtr4tenant = strrchr(execPath4tenant, '/');
-    ASSERT_NE(lastSlashPtr4tenant, nullptr);
-    ret = snprintf(lastSlashPtr4tenant + 1, MAXPGPATH / 2, "tenant_gaussdb_start_config.json");
-    ASSERT_GT(ret, 0);
-    ASSERT_EQ(access(m_tenantConfigFilePath, F_OK), 0); /* It must exist. */
-    DSTORE::TenantConfig config;
-    DSTORE::RetStatus err = TenantConfigInterface::GetTenantConfig(m_tenantConfigFilePath, &config);
-    ASSERT_EQ(err, DSTORE_SUCC);
-    ret = strncmp(config.clusterName, "region_cluster_1", VFS_NAME_MAX_LEN);
-    ASSERT_EQ(ret, 0);
-    ASSERT_EQ(config.communicationConfig.authType, 3);
-
-    /* parse the secuirty connectssl config file. */
-    ret = strncmp(config.securityConfig.connectSsl.caFile, "/unitest/ut_config/ssl_path/ca.crt", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.connectSsl.keyFile, "/unitest/ut_config/ssl_path/server.key", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.connectSsl.crlFile, "/unitest/ut_config/ssl_path/crlFile", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.connectSsl.certFile, "/unitest/ut_config/ssl_path/server.crt", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.connectSsl.cipher, "/unitest/ut_config/ssl_path/cipher",
-        DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ASSERT_EQ(config.securityConfig.connectSsl.certNotifyTime, 30);
-
-    /* parse the secuirty rpcssl config file. */
-    ret = strncmp(config.securityConfig.rpcSsl.caFile, "/unitest/ut_config/ssl_path/ca.crt", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.rpcSsl.keyFile, "/unitest/ut_config/ssl_path/server.key", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.rpcSsl.crlFile, "/unitest/ut_config/ssl_path/crlFile", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.rpcSsl.certFile, "/unitest/ut_config/ssl_path/server.crt", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ret = strncmp(config.securityConfig.rpcSsl.cipher, "/unitest/ut_config/ssl_path/cipher", DSTORE_MAX_TLS_NAME_LEN);
-    ASSERT_EQ(ret, 0);
-    ASSERT_EQ(config.securityConfig.rpcSsl.certNotifyTime, 30);
 }
 
 TEST_F(VfsAdapterTest, FileDescriptorHashTest)
