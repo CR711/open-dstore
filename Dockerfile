@@ -194,7 +194,7 @@ RUN rm -rf /tmp/*
 
 # Add build-dstore alias/function for root user
 # Add build-dstore and make-dstore aliases for root
-RUN echo "alias dstore-build='source ${BUILD_ROOT}/buildenv && cd ${BUILD_ROOT}/utils && bash build.sh -m debug && cd ${BUILD_ROOT} && bash build.sh -m debug -tm ut'" \
+RUN echo "alias dstore-build='source ${BUILD_ROOT}/buildenv && cd ${BUILD_ROOT}/utils && bash build.sh -m debug && cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build && cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON && make -sj$(($(nproc)-2)) install'" \
     >> /root/.bashrc && \
     echo "alias dstore-rebuild='cd ${BUILD_ROOT}/tmp_build && make install -j\$(nproc)'" \
     >> /root/.bashrc

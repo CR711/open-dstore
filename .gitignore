@@ -12,3 +12,6 @@
 /src/common/instrument/wait_event/io_event.h
 /scripts/makedstore.log
 /utils/scripts/makeutils.log
+build_script/dynamic_vfs.conf.init
+build_script/guc.json
+tests/unittest/ut_config/ut_isoland_start.json

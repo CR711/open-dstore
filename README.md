@@ -41,7 +41,9 @@ dstore-build
 # Or run the steps manually:
 source ${BUILD_ROOT}/buildenv
 cd ${BUILD_ROOT}/utils && bash build.sh -m debug
-cd ${BUILD_ROOT}       && bash build.sh -m debug -tm ut
+cd ${BUILD_ROOT}
+mkdir -p tmp_build && cd tmp_build
+cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON && make -sj$(($(nproc)-2)) install
 ```
 
 After a successful build:
@@ -82,10 +84,6 @@ XXX/
     ├── buildtools/ ------------ # build tools
     │   └── gcc7.3/ ------------ # recommended: v7.3
     │       ├── gcc/
-    │       ├── gmp/
-    │       ├── isl/
-    │       ├── mpc/
-    │       └── mpfr/
     ├── secure/ ---------------- # recommended: v3.0.9
     │   ├── include/
     │   └── lib/
@@ -95,7 +93,10 @@ XXX/
     ├── cjson/ ----------------- # recommended: v1.7.17
     │   ├── include/
     │   └── lib/
-    └── gtest/ ----------------- # recommended: v1.10.0
+    ├── gtest/ ----------------- # recommended: v1.10.0
+    │   ├── include/
+    │   └── lib/
+    └── mockcpp/ --------------- # recommended: master
         ├── include/
         └── lib/
 ```
@@ -117,19 +118,33 @@ Download and compile each dependency at the specified version to avoid compatibi
 **Build**: `make -j$(nproc) && make install PREFIX=xxx/output`
 
 ##### gtest
-**Download**: https://github.com/google/googletest/releases
+**Download**: https://github.com/google/googletest/releases (recommended: v1.10.0)
 **Build**:
 ```
-mkdir output && cd output
-cmake \
--DCMAKE_INSTALL_PREFIX=xxx/output \
--DCMAKE_BUILD_TYPE=Debug \
--DBUILD_SHARED_LIBS=OFF \
--DCMAKE_CXX_COMPILER=g++ \
--DCMAKE_C_COMPILER=gcc \
-..
+mkdir build && cd build
+cmake -DCMAKE_INSTALL_PREFIX=xxx/gtest -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0" -DCMAKE_CXX_COMPILER=g++ -DCMAKE_C_COMPILER=gcc ..
 make -j$(nproc) && make install
 ```
+
+> **Note**:
+> - **x86_64**: `-D_GLIBCXX_USE_CXX11_ABI=0` is required. Use `Release` mode (Debug produces `d`-suffixed library names that cause link failures).
+> - **aarch64**: Use `Debug` mode (`-DCMAKE_BUILD_TYPE=Debug`). Do **not** add `-D_GLIBCXX_USE_CXX11_ABI=0`.
+
+
+##### mockcpp
+**Download**: https://github.com/sinojelly/mockcpp
+**Build**:
+```
+mkdir build && cd build
+cmake .. -DMOCKCPP_XUNIT=gtest -DMOCKCPP_XUNIT_HOME=xxx/gtest -DCMAKE_INSTALL_PREFIX=xxx/mockcpp -DCMAKE_CXX_FLAGS="-D_GLIBCXX_USE_CXX11_ABI=0"
+make -j$(nproc) && make install
+```
+
+> **Note**:
+> - **x86_64**: `-D_GLIBCXX_USE_CXX11_ABI=0` is required, matching gtest.
+> - **aarch64**: Do **not** add this flag.
+
+> **Tip**: The build flags above may need adjustment depending on your OS, GCC version, and binutils version. If you encounter link errors, check ABI consistency (`nm libgtest.a | grep EqFailure` — look for `cxx11` in the symbol names).
 
 After building, organize each library's output under its named directory. For example, `local_libs/secure` should contain `include/` and `lib/` subdirectories.
 
@@ -156,10 +171,22 @@ Verify that `libgsutils.so` is present under `utils/output/lib/`.
 
 ```bash
 cd dstore
-bash build.sh -m release   # or: debug
+bash build.sh -m release
+# or debug：
+mkdir -p tmp_build && cd tmp_build
+cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON && make -sj$(($(nproc)-2)) install
 ```
 
 After a successful build, `libdstore.so` and `libdstore.a` will be present under `dstore/output/lib/`.
+
+#### 2.3 Incremental rebuild
+
+After the first full build, just run incremental compilation in `tmp_build/`:
+
+```bash
+cd dstore/tmp_build
+make -sj$(($(nproc)-2)) install
+```
 
 ---
 
@@ -167,16 +194,7 @@ After a successful build, `libdstore.so` and `libdstore.a` will be present under
 
 ## 1. Unit Tests
 
-### 1.1 Build with unit tests enabled
-
-```bash
-cd dstore
-bash build.sh -m debug -tm ut
-```
-
-The build produces a `unittest` binary under `tmp_build/bin/`.
-
-### 1.2 Run tests
+### 1.1 Run tests
 
 All targets are invoked from the `tmp_build/` directory:
 
@@ -201,7 +219,7 @@ Example:
 make run_dstore_buffer_unittest
 ```
 
-### 1.3 Run with AddressSanitizer (ASan)
+### 1.2 Run with AddressSanitizer (ASan)
 
 ```bash
 make run_dstore_ut_asan

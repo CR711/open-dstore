@@ -69,7 +69,7 @@ start_container() {
     log "Container '${CONTAINER_NAME}' is running."
     log ""
     log "  Enter shell : docker exec -it ${CONTAINER_NAME} bash"
-    log "  Full build  : docker exec -it ${CONTAINER_NAME} bash -c 'source \${BUILD_ROOT}/buildenv && cd \${BUILD_ROOT}/utils && bash build.sh -m debug && cd \${BUILD_ROOT} && bash build.sh -m debug -tm ut'"
+    log "  Full build  : docker exec -it ${CONTAINER_NAME} bash -c 'source \${BUILD_ROOT}/buildenv && cd \${BUILD_ROOT}/utils && bash build.sh -m debug && cd \${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build && cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON && make -sj$(($(nproc)-2)) install'"
     log "  Quick make  : docker exec -it ${CONTAINER_NAME} bash -c 'cd \${BUILD_ROOT}/tmp_build && make install -j\$(nproc)'"
     log "  Alias shortcuts (inside container): dstore-build  |  dstore-rebuild"
 }

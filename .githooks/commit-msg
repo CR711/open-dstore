@@ -1,0 +1,34 @@
+#!/bin/bash
+#
+# commit-msg hook: validate commit message format
+
+commit_msg_file="$1"
+commit_msg="$(cat "$commit_msg_file")"
+
+# Strip comment lines (git adds # comments in editor mode)
+commit_msg="$(echo "$commit_msg" | grep -v '^\s*#')"
+
+pattern='(?s)Description\:\s*\S+.*?TicketNo\:.*?Module\:\s*(Transaction State Manager|Centralized Lock Manager|Distributed Lock Manager|Heap Manager|Index Manager|Centralized Buffer Manager|Distributed Buffer Manager|Segment-page Storage Manager|XLog Manager|Undo Manager|Column Data Manager|Column Buffer Manager|SCM Cache Manager|Catalog Table Manager|SQL Engine|Tenant Resource Scheduler|CI)\s*(\n|$)'
+
+if echo "$commit_msg" | grep -Pz "$pattern" > /dev/null 2>&1; then
+    exit 0
+fi
+
+echo ""
+echo "ERROR: Commit message does not match the required format."
+echo ""
+echo "  Description: <summary>        (required)"
+echo "  TicketNo: <ticket number>      (optional)"
+echo "  Module: <module name>          (required)"
+echo ""
+echo "Valid modules:"
+echo "  Transaction State Manager, Centralized Lock Manager,"
+echo "  Distributed Lock Manager, Heap Manager, Index Manager,"
+echo "  Centralized Buffer Manager, Distributed Buffer Manager,"
+echo "  Segment-page Storage Manager, XLog Manager, Undo Manager,"
+echo "  Column Data Manager, Column Buffer Manager, SCM Cache Manager,"
+echo "  Catalog Table Manager, SQL Engine, Tenant Resource Scheduler, CI"
+echo ""
+echo "Or: Merge branch ..."
+echo ""
+exit 1

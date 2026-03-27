@@ -22,7 +22,7 @@ fi
 #-------------------------------------------
 # code path
 #-------------------------------------------
-export BUILD_ROOT=/opt/project/dstore
+export BUILD_ROOT=/home/ub18/develop/open-dstore
 export LOCAL_LIB_PATH=$BUILD_ROOT/../local_libs
 
 #-------------------------------------------
@@ -63,3 +63,8 @@ fi
 # PATH
 #-------------------------------------------
 export PATH=$GCCFOLDER/gcc/bin:$PATH
+
+#-------------------------------------------
+# git hooks
+#-------------------------------------------
+git config core.hooksPath .githooks 2>/dev/null
