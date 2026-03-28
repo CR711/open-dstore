@@ -369,20 +369,20 @@ void WalStream::WaitPlsnSlots(uint64 slot, uint64 targetPlsn, uint64 nowFlushedP
 {
     uint64 retryTime = 0;
     uint8 sleepTime = 10;
+#ifdef UT
+    m_plsnWaitSlot[slot].IncreaseWaitCount();
+#endif
+    FAULT_INJECTION_NOTIFY(DstoreWalFI::WAIT_PLSN_SLOT);
     while (nowFlushedPlsn < targetPlsn) {
         if (unlikely(thrd->GetCore() == nullptr)) {
             GaussUsleep(sleepTime);
         } else {
-#ifdef UT
-            m_plsnWaitSlot[slot].IncreaseWaitCount();
-#endif
             /* Let the first worker thread who own the wait lock be blocked by conditional variable. All other threads
              * wait for the lock. Once flush thread notify this cv, the lock owner will release this lock, and let other
              * threads grab the lock by the order recoded in lock wait queue. One thing need to be mentioned here is
              * that LWLockAcquireOrWait only returns true when it is immediately free, otherwise it will wait until lock
              * is free and return false.
              */
-            FAULT_INJECTION_NOTIFY(DstoreWalFI::WAIT_PLSN_SLOT);
             if (LWLockAcquireOrWait(&m_plsnWaitSlot[slot].m_waitLock, LW_EXCLUSIVE)) {
                 {
                     std::unique_lock<std::mutex> slotNotifyLock(m_plsnWaitSlot[slot].m_waitMtx);
@@ -391,9 +391,6 @@ void WalStream::WaitPlsnSlots(uint64 slot, uint64 targetPlsn, uint64 nowFlushedP
                 }
                 LWLockRelease(&m_plsnWaitSlot[slot].m_waitLock);
             }
-#ifdef UT
-            m_plsnWaitSlot[slot].DecreaseWaitCount();
-#endif
         }
         UpdateNowFlushedPlsn(nowFlushedPlsn);
         if (retryTime++ == WAL_MAX_RETRY_TIME) {
@@ -403,6 +400,9 @@ void WalStream::WaitPlsnSlots(uint64 slot, uint64 targetPlsn, uint64 nowFlushedP
             retryTime = 0;
         }
     }
+#ifdef UT
+    m_plsnWaitSlot[slot].DecreaseWaitCount();
+#endif
     return;
 }
 

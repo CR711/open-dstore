@@ -55,11 +55,11 @@ function build_ut()
     cd "${buidcache_dir}" || exit
     if [ ${asan_mode} == "ON" ]; then
         cmake .. -DCMAKE_BUILD_TYPE=memcheck       \
-                 -DTHIRD_BIN_PATH="${third_lib}"   \
+                 -DLOCAL_LIB_PATH="${third_lib}"   \
                  -DUTILS_PATH="${utils_path}"      \
                  -DENABLE_UT=ON
     else
-        cmake .. -DTHIRD_BIN_PATH="${third_lib}"   \
+        cmake .. -DLOCAL_LIB_PATH="${third_lib}"   \
                  -DUTILS_PATH="${utils_path}"      \
                  -DENABLE_UT=ON
     fi
