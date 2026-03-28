@@ -163,7 +163,7 @@ bool BufferDesc::FastLockHdrIfReusable(const BufferTag &inBufTag, bool justValid
     }
 
     /* We still fail to reuse it, unlock the header and bail. */
-    __sync_fetch_and_and(&state, ~Buffer::BUF_LOCKED);
+    (void)GsAtomicFetchAndU64(&state, ~Buffer::BUF_LOCKED);
     return false;
 }
 

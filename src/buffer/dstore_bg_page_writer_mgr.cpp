@@ -405,12 +405,12 @@ uint32 BgPageWriterMgr::GetPagewriterInfo(PagewriterInfo **infos)
         if (dirtyPageQueue == nullptr || bgpageWriter == nullptr) {
             continue;
         }
-        infos[j]->nodeId = g_storageInstance->GetGuc()->selfNodeId;
-        infos[j]->actualFlushCnt = dirtyPageQueue->m_statisticInfo.actualFlushCnt.load(std::memory_order_acquire);
-        infos[j]->lastRemoveCnt = dirtyPageQueue->m_statisticInfo.lastRemoveCnt;
-        infos[j]->pushQueueTotalCnt = dirtyPageQueue->m_statisticInfo.pushQueueTotalCnt.load(std::memory_order_acquire);
-        infos[j]->removeTotalCnt = dirtyPageQueue->m_statisticInfo.removeTotalCnt;
-        infos[j]->recoveryPlsn = bgpageWriter->GetMinRecoveryPlsn();
+        (*infos)[j].nodeId = g_storageInstance->GetGuc()->selfNodeId;
+        (*infos)[j].actualFlushCnt = dirtyPageQueue->m_statisticInfo.actualFlushCnt.load(std::memory_order_acquire);
+        (*infos)[j].lastRemoveCnt = dirtyPageQueue->m_statisticInfo.lastRemoveCnt;
+        (*infos)[j].pushQueueTotalCnt = dirtyPageQueue->m_statisticInfo.pushQueueTotalCnt.load(std::memory_order_acquire);
+        (*infos)[j].removeTotalCnt = GsAtomicReadU64(&dirtyPageQueue->m_statisticInfo.removeTotalCnt);
+        (*infos)[j].recoveryPlsn = bgpageWriter->GetMinRecoveryPlsn();
         j++;
     }
     return length;

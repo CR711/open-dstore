@@ -1455,7 +1455,7 @@ RetStatus BufMgr::TryFlush(BufferDesc *bufferDesc)
     RetStatus ret = DSTORE_SUCC;
     uint64 state = bufferDesc->GetState();
     if (state & Buffer::BUF_CONTENT_DIRTY) {
-        StorageAssert(~(state & Buffer::BUF_CR_PAGE));
+        StorageAssert(!(state & Buffer::BUF_CR_PAGE));
         bufferDesc->Pin();
         if (bufferDesc->bufTag.IsInvalid()) {
             bufferDesc->Unpin();

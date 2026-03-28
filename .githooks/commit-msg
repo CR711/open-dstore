@@ -10,7 +10,7 @@ commit_msg="$(echo "$commit_msg" | grep -v '^\s*#')"
 
 pattern='(?s)Description\:\s*\S+.*?TicketNo\:.*?Module\:\s*(Transaction State Manager|Centralized Lock Manager|Distributed Lock Manager|Heap Manager|Index Manager|Centralized Buffer Manager|Distributed Buffer Manager|Segment-page Storage Manager|XLog Manager|Undo Manager|Column Data Manager|Column Buffer Manager|SCM Cache Manager|Catalog Table Manager|SQL Engine|Tenant Resource Scheduler|CI)\s*(\n|$)'
 
-if echo "$commit_msg" | grep -Pz "$pattern" > /dev/null 2>&1; then
+if echo "$commit_msg" | perl -0777 -ne "exit 0 if /$pattern/; exit 1" > /dev/null 2>&1; then
     exit 0
 fi
 

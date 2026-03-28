@@ -148,7 +148,7 @@ void BgDiskPageMasterWriter::Run()
 
         /* advance recovery Plsn */
         recoveryPlsn = m_dirtyPageQueue->AdvanceHeadAfterFlush(m_tmpDirtyPageVec, advanceNum, slotId);
-        m_dirtyPageQueue->m_statisticInfo.actualFlushCnt = dirtyPageNumber;
+        m_dirtyPageQueue->m_statisticInfo.actualFlushCnt.store(dirtyPageNumber, std::memory_order_release);
         if (dirtyPageNumber > 0 || advanceNum > 0) {
             ErrLog(DSTORE_DEBUG1, MODULE_BGPAGEWRITER,
                    ErrMsg("BgPageWriter %lu for pdb %hhu walId %lu flush finish, actual flush %u, "

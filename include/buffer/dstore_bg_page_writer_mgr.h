@@ -198,7 +198,7 @@ public:
     struct {
         std::atomic_uint64_t pushQueueTotalCnt;
         std::atomic_uint64_t actualFlushCnt;
-        uint64 removeTotalCnt;
+        gs_atomic_uint64 removeTotalCnt;
         uint64 lastRemoveCnt;
     } m_statisticInfo;
 
