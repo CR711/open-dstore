@@ -116,6 +116,19 @@ Stop
 
 ---
 
+## 注意事项
+
+> **重要：配置文件路径**
+> 
+> 在执行 `sysbenchtest` 之前，请务必根据实际物理路径修改 `build_script/guc.json` 文件中的 `startConfigPath` 字段，确保其指向正确的 `dstore_conf.json` 位置。
+> 
+> 示例：
+> ```json
+> "startConfigPath": "/opt/project/dstore/build_script/dstore_conf.json"
+> ```
+
+---
+
 ## 编译与运行
 
 > 所有操作必须在 Docker 容器 `dstore_env` 内执行，参考项目根目录 `CLAUDE.md`。
@@ -125,7 +138,16 @@ Stop
 ```bash
 # 容器内，先确保 dstore 主库和 utils 已编译
 cd /opt/project/dstore
-bash build.sh -m release -co "-DENABLE_SYSBENCH=ON"
+mkdir -p tmp_build && cd tmp_build
+cmake .. -DCMAKE_BUILD_TYPE=release -DDSTORE_TEST_TOOL=ON
+make -sj8 install
+```
+
+或者使用 `build.sh`：
+
+```bash
+cd /opt/project/dstore
+bash build.sh -m release -co "-DDSTORE_TEST_TOOL=ON"
 ```
 
 编译产物：`output/bin/sysbenchtest`，配置文件安装到构建目录。

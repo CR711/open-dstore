@@ -402,11 +402,11 @@ void DSTORE::SysbenchStorageInstance::Init(const char *dataDirBase)
     StorageSession *sc = CreateStorageSession(1ULL);
     thrd->AttachSessionToThread(sc);
     (void)g_instance->Bootstrap(&guc);
+    (void)thrd->InitTransactionRuntime(g_defaultPdbId, nullptr, nullptr);
     (void)thrd->InitStorageContext(g_defaultPdbId);
     g_instance->AddVisibleThread(thrd, g_defaultPdbId);
     CreateTemplateTablespace(DSTORE::g_defaultPdbId);
     CreateUndoMapSegment(DSTORE::g_defaultPdbId);
-    (void)thrd->InitTransactionRuntime(g_defaultPdbId, nullptr, nullptr);
     DSTORE::InitVfsClientHandles();
 }
 
@@ -467,13 +467,20 @@ void DSTORE::SysbenchStorageInstance::Start(Oid allocMaxRelOid, const char *data
  * ---------------------------------------------------------------- */
 void DSTORE::SysbenchStorageInstance::Stop()
 {
-    if (g_instance != nullptr) {
-        g_instance->Destroy();
-        g_instance = nullptr;
-    }
     if (simulator != nullptr) {
         simulator->Destory();
         delete simulator;
         simulator = nullptr;
+    }
+
+    if (g_instance != nullptr) {
+        StorageSession *sc = thrd->GetSession();
+        thrd->DetachSessionFromThread();
+        g_instance->ShutdownInstance();
+        StorageInstanceInterface::DestoryInstance();
+        g_instance = nullptr;
+        if (sc != nullptr) {
+            CleanUpSession(sc);
+        }
     }
 }

@@ -377,7 +377,6 @@ void StorageInstance::Initialize(StorageGUC *guc, bool bootStrap)
 
 void StorageInstance::Destroy()
 {
-    StorageReleasePanic(true, MODULE_FRAMEWORK, ErrMsg("abandon interface!"));
     m_instanceState = static_cast<uint8>(InstanceState::NOT_ACTIVE);
     StorageInstance::StopBgThreads();
 

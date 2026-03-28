@@ -958,6 +958,13 @@ RetStatus StoragePdb::InitVFS()
 
 RetStatus StoragePdb::DestroyVFS(const char *vfsName, bool dropData, PdbId pdbId)
 {
+    if (vfsName == nullptr || strlen(vfsName) == 0) {
+        if (m_vfs != nullptr) {
+            delete m_vfs;
+            m_vfs = nullptr;
+        }
+        return DSTORE_SUCC;
+    }
     if (m_vfs) {
         if (STORAGE_FUNC_FAIL(m_vfs->Destroy(vfsName, dropData))) {
             ErrLog(DSTORE_ERROR, MODULE_FRAMEWORK,
@@ -3155,7 +3162,7 @@ void StoragePdb::GenerateVfsName(PdbId pdbId, char* vfsName, uint32 len)
             StorageReleasePanic(true, MODULE_PDB, ErrMsg("Generate vfs name failed"));
         }
     } else {
-        StorageReleasePanic(true, MODULE_PDB, ErrMsg("Generate vfs name failed, invalid pdbId."));
+        ErrLog(DSTORE_ERROR, MODULE_PDB, ErrMsg("Generate vfs name failed, invalid pdbId."));
     }
 }
 
