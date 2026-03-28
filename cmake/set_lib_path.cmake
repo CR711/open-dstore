@@ -76,6 +76,15 @@ set(LZ4_LIB_PATH ${LZ4_HOME}/lib)
 set(LZ4_BIN_PATH ${LZ4_HOME}/bin)
 message("-- LZ4_HOME: ${LZ4_HOME}")
 
+#############################################################################
+# mockcpp component
+#############################################################################
+set(MOCKCPP_HOME ${LOCAL_LIB_PATH}/mockcpp)
+set(MOCKCPP_INCLUDE_PATH ${MOCKCPP_HOME}/include)
+set(MOCKCPP_LIB_PATH ${MOCKCPP_HOME}/lib)
+set(MOCKCPP_3RDPARTY_PATH ${MOCKCPP_HOME}/include/fake_boost)
+message("-- MOCKCPP_HOME: ${MOCKCPP_HOME}")
+
 ############################################################################
 # mockcpp component
 ############################################################################

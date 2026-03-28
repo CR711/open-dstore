@@ -3,6 +3,7 @@ if (ENABLE_UT STREQUAL "ON")
 endif()
 if (ENABLE_TPCC STREQUAL "ON" OR DSTORE_TEST_TOOL STREQUAL "ON")
     add_subdirectory(tpcctest)
+    add_subdirectory(sysbenchtest)
 endif()
 
 add_subdirectory(utilities)
@@ -154,3 +155,17 @@ add_custom_target(run_dstore_tpcctest_asan
     COMMENT "run dstore one-node tpcctest"
 )
 #--------add tpcctest cmake command end--------
+
+#--------add sysbenchtest cmake command start--------
+add_custom_target(run_dstore_sysbenchtest
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests
+     && sh build_and_run_sysbenchtest.sh -t ${LOCAL_LIB_PATH} -u ${UTILS_HOME} -r true
+    COMMENT "run dstore sysbench simulation test"
+)
+
+add_custom_target(run_dstore_sysbenchtest_asan
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests
+     && sh build_and_run_sysbenchtest.sh -t ${LOCAL_LIB_PATH} -u ${UTILS_HOME} -r true -a ON
+    COMMENT "run dstore sysbench simulation test with asan"
+)
+#--------add sysbenchtest cmake command end--------

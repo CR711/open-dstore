@@ -24,6 +24,7 @@ fi
 #-------------------------------------------
 export BUILD_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 export LOCAL_LIB_PATH=$BUILD_ROOT/../local_libs
+export USER=$(whoami 2>/dev/null || echo "root")
 
 #-------------------------------------------
 # lib path
@@ -31,6 +32,7 @@ export LOCAL_LIB_PATH=$BUILD_ROOT/../local_libs
 export C_INCLUDE_PATH=${LOCAL_LIB_PATH}/lz4/include:${C_INCLUDE_PATH}
 export C_INCLUDE_PATH=${LOCAL_LIB_PATH}/cjson/include:${C_INCLUDE_PATH}
 export C_INCLUDE_PATH=${LOCAL_LIB_PATH}/gtest/include:${C_INCLUDE_PATH}
+export C_INCLUDE_PATH=${LOCAL_LIB_PATH}/mockcpp/include:${C_INCLUDE_PATH}
 export C_INCLUDE_PATH=${LOCAL_LIB_PATH}/secure/include:${C_INCLUDE_PATH}
 export CPLUS_INCLUDE_PATH=${C_INCLUDE_PATH}
 
@@ -47,6 +49,7 @@ export DEBUG_TYPE=release
 export LD_LIBRARY_PATH=${LOCAL_LIB_PATH}/lz4/lib:${LD_LIBRARY_PATH}
 export LD_LIBRARY_PATH=${LOCAL_LIB_PATH}/cjson/lib:${LD_LIBRARY_PATH}
 export LD_LIBRARY_PATH=${LOCAL_LIB_PATH}/gtest/lib:${LD_LIBRARY_PATH}
+export LD_LIBRARY_PATH=${LOCAL_LIB_PATH}/mockcpp/lib:${LD_LIBRARY_PATH}
 export LD_LIBRARY_PATH=${LOCAL_LIB_PATH}/secure/lib:${LD_LIBRARY_PATH}
 
 export GCC_VERNAME=gcc7.3
@@ -55,13 +58,6 @@ export GCCFOLDER=$LOCAL_LIB_PATH/buildtools/$GCC_VERNAME
 export CC=$GCCFOLDER/gcc/bin/gcc
 export CXX=$GCCFOLDER/gcc/bin/g++
 export LD_LIBRARY_PATH=$GCCFOLDER/gcc/lib64:$GCCFOLDER/isl/lib:$GCCFOLDER/mpc/lib/:$GCCFOLDER/mpfr/lib/:$GCCFOLDER/gmp/lib/:$LD_LIBRARY_PATH
-if [ "$OS_NAME" == "Huawei Cloud EulerOS" ]; then
-  \cp /usr/lib64/libstdc++.so.6 $GCCFOLDER/gcc/lib64/
-fi
-
-#-------------------------------------------
-# PATH
-#-------------------------------------------
 export PATH=$GCCFOLDER/gcc/bin:$PATH
 
 #-------------------------------------------

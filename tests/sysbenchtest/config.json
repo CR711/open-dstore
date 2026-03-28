@@ -1,0 +1,22 @@
+{
+    "tables":          128,
+    "table_size":      25000,
+    "threads":         32,
+    "time":            120,
+    "warmup_time":     15,
+    "report_interval": 10,
+    "range_size":      100,
+    "point_selects":   10,
+    "simple_ranges":   0,
+    "sum_ranges":      0,
+    "order_ranges":    0,
+    "distinct_ranges": 0,
+    "index_updates":   1,
+    "non_index_updates": 1,
+    "delete_inserts":  1,
+    "skip_trx":        0,
+    "secondary":       0,
+    "auto_inc":        1,
+    "mode":            "read_write",
+    "command":         "all"
+}
