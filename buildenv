@@ -22,8 +22,8 @@ fi
 #-------------------------------------------
 # code path
 #-------------------------------------------
-export BUILD_ROOT=/home/ub18/develop/open-dstore
-export LOCAL_LIB_PATH=$BUILD_ROOT/../local_libs
+export BUILD_ROOT=${BUILD_ROOT:-/home/ub18/develop/open-dstore}
+export LOCAL_LIB_PATH=${LOCAL_LIB_PATH:-$BUILD_ROOT/../local_libs}
 
 #-------------------------------------------
 # lib path

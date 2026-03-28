@@ -1,0 +1,42 @@
+name: PR Build Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository }}-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build utils
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils
+          bash build.sh -m release
+
+      - name: Build dstore
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}
+          bash build.sh -m release
+
+      - name: Verify build artifacts
+        run: |
+          echo "Checking build artifacts..."
+          test -f ${BUILD_ROOT}/utils/output/lib/libgsutils.so && echo "libgsutils.so OK" || exit 1
+          test -f ${BUILD_ROOT}/output/lib/libdstore.so && echo "libdstore.so OK" || exit 1
+          test -f ${BUILD_ROOT}/output/lib/libdstore.a && echo "libdstore.a OK" || exit 1
+          echo "All artifacts verified."
