@@ -25,14 +25,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Fix gtest library names
-        run: |
-          cd ${LOCAL_LIB_PATH}/gtest/lib
-          for f in *d.a; do
-            target="${f%d.a}.a"
-            [ ! -f "$target" ] && ln -s "$f" "$target"
-          done
-
       - name: Build utils
         run: |
           source ${BUILD_ROOT}/buildenv
