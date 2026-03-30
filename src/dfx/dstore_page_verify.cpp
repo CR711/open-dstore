@@ -194,6 +194,11 @@ RetStatus VerifyPage(const Page *page, VerifyLevel level, VerifyReport *report)
     return g_pageVerifyRegistry.Verify(page, level, report);
 }
 
+bool IsPageVerifierRegistered(PageType type)
+{
+    return g_pageVerifyRegistry.IsRegistered(type);
+}
+
 void SetDfxVerifyLevel(VerifyLevel level)
 {
     g_dfxVerifyLevel.store(static_cast<uint32>(level));

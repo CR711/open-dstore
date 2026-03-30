@@ -48,6 +48,7 @@
 #include "framework/dstore_instr_time.h"
 #include "buffer/dstore_buf_mgr.h"
 #include "buffer/dstore_checkpointer.h"
+#include "dfx/dstore_page_verify.h"
 #include "common/fault_injection/dstore_heap_fault_injection.h"
 #include "common/fault_injection/dstore_buf_fault_injection.h"
 #include "fault_injection/fault_injection.h"
@@ -58,6 +59,20 @@ namespace DSTORE {
 constexpr uint32 FREE_BUFFER_RETRY_TIMES = 32;
 constexpr uint32 INVALIDATE_BUFFER_RETRY_TIMES = 65536;
 constexpr uint32 RETRY_WARNING_THRESHOLD = 32;
+
+namespace {
+
+RetStatus VerifyPageBeforePersist(Page *page)
+{
+    if (page == nullptr || !IsPageVerifierRegistered(page->GetType())) {
+        return DSTORE_SUCC;
+    }
+
+    page->SetChecksum();
+    return VerifyPageInline(page);
+}
+
+}  // namespace
 constexpr uint32 RETRY_FLUSH_DEBUG_THRESHOLD = 20;
 constexpr uint32 FLUSH_THREAD_NUM = 10;
 constexpr uint32 INVALIDATE_THREAD_NUM = 10;
@@ -888,6 +903,12 @@ RetStatus BufMgr::MarkDirty(BufferDesc *bufferDesc, bool needUpdateRecoveryPlsn)
         "Page not owned when mark dirty");
     StorageAssert(bufferDesc->IsPinnedPrivately());
 
+    if (STORAGE_FUNC_FAIL(VerifyPageBeforePersist(bufferDesc->GetPage()))) {
+        bufferDesc->UnlockHdr(oldState);
+        ErrLog(DSTORE_ERROR, MODULE_BUFMGR, ErrMsg("MarkDirty blocked by page verify failure."));
+        return DSTORE_FAIL;
+    }
+
     /* 1. Set dirty page flag. */
     uint64 state = oldState | (Buffer::BUF_CONTENT_DIRTY | Buffer::BUF_HINT_DIRTY);
 
@@ -1062,6 +1083,11 @@ RetStatus BufMgr::WriteBlock(BufferDesc *bufferDesc)
         return DSTORE_FAIL;
     }
 
+    if (STORAGE_FUNC_FAIL(VerifyPageBeforePersist(bufferDesc->GetPage()))) {
+        ErrLog(DSTORE_ERROR, MODULE_BUFMGR, ErrMsg("WriteBlock blocked by page verify failure."));
+        return DSTORE_FAIL;
+    }
+
     /* Step 2: Get IO lock. */
     /*
      * Acquire the buffer's io_in_progress lock.  If start_io returns
@@ -1188,6 +1214,12 @@ RetStatus BufMgr::WriteBlockAsync(BufferDesc *bufferDesc, void *aioCtx)
     if (STORAGE_FUNC_FAIL(PrepareCheckPageBeforeStartIo(bufferDesc))) {
         UnlockContent(bufferDesc);
         ErrLog(DSTORE_ERROR, MODULE_BUFMGR, ErrMsg("Async flush fail when prepare check page before start io."));
+        return DSTORE_FAIL;
+    }
+
+    if (STORAGE_FUNC_FAIL(VerifyPageBeforePersist(bufferDesc->GetPage()))) {
+        UnlockContent(bufferDesc);
+        ErrLog(DSTORE_ERROR, MODULE_BUFMGR, ErrMsg("WriteBlockAsync blocked by page verify failure."));
         return DSTORE_FAIL;
     }
 

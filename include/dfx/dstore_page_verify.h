@@ -50,6 +50,7 @@ void InitPageVerifiers();
 RetStatus VerifyPageInline(const Page *page);
 RetStatus VerifyPageInlineWithReport(const Page *page, VerifyReport *report);
 RetStatus VerifyPage(const Page *page, VerifyLevel level, VerifyReport *report);
+bool IsPageVerifierRegistered(PageType type);
 
 void SetDfxVerifyLevel(VerifyLevel level);
 VerifyLevel GetDfxVerifyLevel();

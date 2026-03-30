@@ -19,11 +19,26 @@
 #include "buffer/dstore_buf_mgr_temporary.h"
 #include "errorcode/dstore_framework_error_code.h"
 #include "framework/dstore_instance.h"
+#include "dfx/dstore_page_verify.h"
 #include "page/dstore_index_page.h"
 #include "transaction/dstore_transaction.h"
 #include "common/error/dstore_error.h"
 
 namespace DSTORE {
+
+namespace {
+
+RetStatus VerifyTmpPageBeforePersist(Page *page)
+{
+    if (page == nullptr || !IsPageVerifierRegistered(page->GetType())) {
+        return DSTORE_SUCC;
+    }
+
+    page->SetChecksum();
+    return VerifyPageInline(page);
+}
+
+}  // namespace
 
 /* entry for buffer lookup hashtable */
 struct BufferLookupEnt {
@@ -337,6 +352,10 @@ READ:
 RetStatus TmpLocalBufMgr::MarkDirty(BufferDesc *bufferDesc, UNUSE_PARAM bool needUpdateRecoveryPlsn)
 {
     StorageAssert(m_initialized);
+    if (STORAGE_FUNC_FAIL(VerifyTmpPageBeforePersist(bufferDesc->GetPage()))) {
+        ErrLog(DSTORE_ERROR, MODULE_BUFMGR, ErrMsg("TmpLocalBufMgr::MarkDirty blocked by page verify failure."));
+        return DSTORE_FAIL;
+    }
     bufferDesc->state |= Buffer::BUF_CONTENT_DIRTY;
     return DSTORE_SUCC;
 }
@@ -358,6 +377,10 @@ RetStatus TmpLocalBufMgr::WriteBlock(BufferDesc *bufferDesc)
     }
     vfs = storagePdb->GetVFS();
     StorageReleasePanic(vfs == nullptr, MODULE_BUFMGR, ErrMsg("vfs is nullptr, pdb %u", bufferDesc->GetPdbId()));
+    if (STORAGE_FUNC_FAIL(VerifyTmpPageBeforePersist(bufferDesc->GetPage()))) {
+        ErrLog(DSTORE_ERROR, MODULE_BUFMGR, ErrMsg("TmpLocalBufMgr::WriteBlock blocked by page verify failure."));
+        return DSTORE_FAIL;
+    }
     bufferDesc->GetPage()->SetChecksum();
 
     if (STORAGE_FUNC_FAIL(vfs->WritePageSync(pageId, bufferDesc->GetPage()))) {
