@@ -54,3 +54,5 @@ target_link_directories(dstore
 )
 
 add_static_libtarget(dstore dstore_src_list dstore_include_directories "${dstore_macro_options}" "${dstore_compile_options}")
+
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/dfx)

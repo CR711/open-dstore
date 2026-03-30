@@ -1,9 +1,19 @@
 .idea
+.vscode/
 .claude/settings.local.json
 .claude/projects/
 .DS_Store
+Thumbs.db
 tmp_build
+build/
+bin/
+out/
 output
+*.log
+*.tmp
+*.swp
+.env*
+.agents/
 
 /include/config.h
 /interface/framework/dstore_io_event.h

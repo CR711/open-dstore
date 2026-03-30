@@ -86,3 +86,5 @@ install(FILES
     ut_config/ssl_path/server.crt
     DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
 )
+
+add_subdirectory(ut_dfx)

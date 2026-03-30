@@ -69,6 +69,7 @@ include(build_function)
 include(set_lib_path)
 include(build_options)
 
+# Core engine modules, including src/dfx/, are wired from src/CMakeLists.txt.
 add_subdirectory(src)
 add_subdirectory(tools)
 
