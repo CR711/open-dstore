@@ -79,20 +79,20 @@
 
 **Segment meta verifiers:**
 
-- [ ] T027 [P] [US1] Implement lightweight and heavyweight verifiers for DATA_SEGMENT_META_PAGE_TYPE, HEAP_SEGMENT_META_PAGE_TYPE, UNDO_SEGMENT_META_PAGE_TYPE in `src/dfx/dstore_segment_page_verify.cpp` — heavyweight: segment type validity, extent chain head pointer format, totalBlockCount > 0, dataFirst/dataLast format, numFsms bounds (for heap)
-- [ ] T028 [P] [US1] Register all 3 segment meta verifiers in `src/dfx/dstore_segment_page_verify.cpp`
+- [X] T027 [P] [US1] Implement lightweight and heavyweight verifiers for DATA_SEGMENT_META_PAGE_TYPE, HEAP_SEGMENT_META_PAGE_TYPE, UNDO_SEGMENT_META_PAGE_TYPE in `src/dfx/dstore_segment_page_verify.cpp` — heavyweight: segment type validity, extent chain head pointer format, totalBlockCount > 0, dataFirst/dataLast format, numFsms bounds (for heap)
+- [X] T028 [P] [US1] Register all 3 segment meta verifiers in `src/dfx/dstore_segment_page_verify.cpp`
 
 **Tablespace module verifiers:**
 
-- [ ] T029 [P] [US1] Implement lightweight and heavyweight verifiers for TBS_EXTENT_META_PAGE_TYPE in `src/tablespace/dstore_tbs_page_verify.cpp` — heavyweight: magic == EXTENT_META_MAGIC, extSize in valid set {8,128,1024,8192}, nextExtMetaPageId format
-- [ ] T030 [P] [US1] Implement lightweight and heavyweight verifiers for TBS_BITMAP_PAGE_TYPE and TBS_BITMAP_META_PAGE_TYPE in `src/tablespace/dstore_tbs_page_verify.cpp` — heavyweight: allocatedExtentCount == popcount(bitmap), groupCount bounds, bitmapPagesPerGroup consistency
-- [ ] T031 [P] [US1] Implement lightweight and heavyweight verifiers for TBS_FILE_META_PAGE_TYPE and TBS_SPACE_META_PAGE_TYPE in `src/tablespace/dstore_tbs_page_verify.cpp`
-- [ ] T032 [P] [US1] Register all 5 tablespace-related verifiers in `src/tablespace/dstore_tbs_page_verify.cpp`
+- [X] T029 [P] [US1] Implement lightweight and heavyweight verifiers for TBS_EXTENT_META_PAGE_TYPE in `src/tablespace/dstore_tbs_page_verify.cpp` — heavyweight: magic == EXTENT_META_MAGIC, extSize in valid set {8,128,1024,8192}, nextExtMetaPageId format
+- [X] T030 [P] [US1] Implement lightweight and heavyweight verifiers for TBS_BITMAP_PAGE_TYPE and TBS_BITMAP_META_PAGE_TYPE in `src/tablespace/dstore_tbs_page_verify.cpp` — heavyweight: allocatedExtentCount == popcount(bitmap), groupCount bounds, bitmapPagesPerGroup consistency
+- [X] T031 [P] [US1] Implement lightweight and heavyweight verifiers for TBS_FILE_META_PAGE_TYPE and TBS_SPACE_META_PAGE_TYPE in `src/tablespace/dstore_tbs_page_verify.cpp`
+- [X] T032 [P] [US1] Register all 5 tablespace-related verifiers in `src/tablespace/dstore_tbs_page_verify.cpp`
 
 **Btree recycle verifiers:**
 
-- [ ] T033 [P] [US1] Implement lightweight and heavyweight verifiers for BTR_QUEUE_PAGE_TYPE, BTR_RECYCLE_PARTITION_META_PAGE_TYPE, BTR_RECYCLE_ROOT_META_PAGE_TYPE in `src/index/dstore_btr_recycle_page_verify.cpp`
-- [ ] T034 [P] [US1] Register all 3 btree recycle verifiers in `src/index/dstore_btr_recycle_page_verify.cpp`
+- [X] T033 [P] [US1] Implement lightweight and heavyweight verifiers for BTR_QUEUE_PAGE_TYPE, BTR_RECYCLE_PARTITION_META_PAGE_TYPE, BTR_RECYCLE_ROOT_META_PAGE_TYPE in `src/index/dstore_btr_recycle_page_verify.cpp`
+- [X] T034 [P] [US1] Register all 3 btree recycle verifiers in `src/index/dstore_btr_recycle_page_verify.cpp`
 
 **InitPageVerifiers and inline integration:**
 

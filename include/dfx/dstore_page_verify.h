@@ -42,6 +42,9 @@ void RegisterHeapPageVerifier();
 void RegisterIndexPageVerifier();
 void RegisterFsmPageVerifiers();
 void RegisterUndoPageVerifiers();
+void RegisterSegmentPageVerifiers();
+void RegisterTablespacePageVerifiers();
+void RegisterBtrRecyclePageVerifiers();
 void InitPageVerifiers();
 
 RetStatus VerifyPageInline(const Page *page);
