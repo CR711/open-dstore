@@ -96,7 +96,7 @@
 
 **InitPageVerifiers and inline integration:**
 
-- [ ] T035 [US1] Implement InitPageVerifiers() in `src/dfx/dstore_page_verify.cpp` — call all 17 Register*Verifier() functions; call from StorageInstance initialization path
+- [X] T035 [US1] Implement InitPageVerifiers() in `src/dfx/dstore_page_verify.cpp` — call all 17 Register*Verifier() functions; call from StorageInstance initialization path
 - [ ] T036 [US1] Embed VerifyPageInline() calls at page write/flush sites — dirty page flush path, and key CRUD page modification paths in `src/buffer/`, `src/heap/`, `src/index/` (add after page modification, before marking dirty or writing out)
 
 **Tests:**

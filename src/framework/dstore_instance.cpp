@@ -69,6 +69,7 @@
 #include "framework/dstore_instance.h"
 #include "lock/dstore_lock_datatype.h"
 #include "buffer/dstore_buf.h"
+#include "dfx/dstore_page_verify.h"
 
 namespace DSTORE {
 
@@ -358,6 +359,7 @@ void StorageInstance::Initialize(StorageGUC *guc, bool bootStrap)
     StorageReleasePanic(m_instanceState != static_cast<uint8>(InstanceState::NOT_ACTIVE),
                         MODULE_FRAMEWORK, ErrMsg("m_memoryMgr is nullptr!"));
     AutoMemCxtSwitch autoSwitch(m_memoryMgr->GetGroupContext(MEMORY_CONTEXT_LONGLIVE));
+    InitPageVerifiers();
     (void)GucInit(guc);
     (void)TypecacheMgrInit();
     (void)ThreadCoreMgrInit();
@@ -401,6 +403,7 @@ RetStatus StorageInstance::Bootstrap(StorageGUC *guc)
         return DSTORE_FAIL;
     }
     AutoMemCxtSwitch autoSwitch(m_memoryMgr->GetGroupContext(MEMORY_CONTEXT_LONGLIVE));
+    InitPageVerifiers();
     ret = GucInit(guc);
     if (STORAGE_FUNC_FAIL(ret)) {
         return DSTORE_FAIL;
@@ -477,6 +480,7 @@ RetStatus StorageInstance::StartupInstance(StorageGUC *guc)
         return DSTORE_FAIL;
     }
     AutoMemCxtSwitch autoSwitch(m_memoryMgr->GetGroupContext(MEMORY_CONTEXT_LONGLIVE));
+    InitPageVerifiers();
     ret = GucInit(guc);
     if (STORAGE_FUNC_FAIL(ret)) {
         return DSTORE_FAIL;

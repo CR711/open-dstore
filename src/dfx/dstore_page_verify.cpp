@@ -158,6 +158,11 @@ void InitPageVerifiers()
 {
     RegisterHeapPageVerifier();
     RegisterIndexPageVerifier();
+    RegisterFsmPageVerifiers();
+    RegisterUndoPageVerifiers();
+    RegisterSegmentPageVerifiers();
+    RegisterTablespacePageVerifiers();
+    RegisterBtrRecyclePageVerifiers();
 }
 
 RetStatus VerifyPageInline(const Page *page)
