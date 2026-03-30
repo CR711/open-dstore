@@ -155,7 +155,10 @@ RetStatus RegisterPageVerifier(
 }
 
 void InitPageVerifiers()
-{}
+{
+    RegisterHeapPageVerifier();
+    RegisterIndexPageVerifier();
+}
 
 RetStatus VerifyPageInline(const Page *page)
 {

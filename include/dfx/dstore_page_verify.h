@@ -38,6 +38,8 @@ private:
 
 RetStatus RegisterPageVerifier(
     PageType type, const char *typeName, PageVerifyFunc lightweightFunc, PageVerifyFunc heavyweightFunc);
+void RegisterHeapPageVerifier();
+void RegisterIndexPageVerifier();
 void InitPageVerifiers();
 
 RetStatus VerifyPageInline(const Page *page);

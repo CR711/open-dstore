@@ -56,15 +56,15 @@
 
 **Heap module verifiers:**
 
-- [ ] T016 [P] [US1] Implement VerifyHeapPageLightweight() in `src/heap/dstore_heap_page_verify.cpp` — heap-specific header checks beyond generic (potentialDelSize bounds, fsmIndex validity)
-- [ ] T017 [P] [US1] Implement VerifyHeapPageHeavyweight() in `src/heap/dstore_heap_page_verify.cpp` — ItemId datalen vs tuple length, ItemId state invariants (UNUSED: len=0; NORMAL: len>0 offset valid; NO_STORAGE: tdId/tdStatus/tupLiveMode valid; UNREADABLE_RANGE_HOLDER: len>0), no overlapping items, TD count in [MIN_TD_COUNT, MAX_TD_COUNT], TD state validity (3 states), TD CSN-status consistency, TD-tuple cross-reference
-- [ ] T018 [P] [US1] Register HeapPage verifier via RegisterHeapPageVerifier() in `src/heap/dstore_heap_page_verify.cpp`
+- [X] T016 [P] [US1] Implement VerifyHeapPageLightweight() in `src/heap/dstore_heap_page_verify.cpp` — heap-specific header checks beyond generic (potentialDelSize bounds, fsmIndex validity)
+- [X] T017 [P] [US1] Implement VerifyHeapPageHeavyweight() in `src/heap/dstore_heap_page_verify.cpp` — ItemId datalen vs tuple length, ItemId state invariants (UNUSED: len=0; NORMAL: len>0 offset valid; NO_STORAGE: tdId/tdStatus/tupLiveMode valid; UNREADABLE_RANGE_HOLDER: len>0), no overlapping items, TD count in [MIN_TD_COUNT, MAX_TD_COUNT], TD state validity (3 states), TD CSN-status consistency, TD-tuple cross-reference
+- [X] T018 [P] [US1] Register HeapPage verifier via RegisterHeapPageVerifier() in `src/heap/dstore_heap_page_verify.cpp`
 
 **Index module verifiers:**
 
-- [ ] T019 [P] [US1] Implement VerifyIndexPageLightweight() in `src/index/dstore_index_page_verify.cpp` — index-specific header checks (special region offset/size for BtrPageLinkAndStatus)
-- [ ] T020 [P] [US1] Implement VerifyIndexPageHeavyweight() in `src/index/dstore_index_page_verify.cpp` — BtrPageLinkAndStatus validation (page type, level, split status, sibling link format), high key at offset 1 >= all other keys, intra-page key ordering, key type consistency with BtrMeta
-- [ ] T021 [P] [US1] Register IndexPage verifier via RegisterIndexPageVerifier() in `src/index/dstore_index_page_verify.cpp`
+- [X] T019 [P] [US1] Implement VerifyIndexPageLightweight() in `src/index/dstore_index_page_verify.cpp` — index-specific header checks (special region offset/size for BtrPageLinkAndStatus)
+- [X] T020 [P] [US1] Implement VerifyIndexPageHeavyweight() in `src/index/dstore_index_page_verify.cpp` — BtrPageLinkAndStatus validation (page type, level, split status, sibling link format), high key at offset 1 >= all other keys, intra-page key ordering, key type consistency with BtrMeta
+- [X] T021 [P] [US1] Register IndexPage verifier via RegisterIndexPageVerifier() in `src/index/dstore_index_page_verify.cpp`
 
 **FSM module verifiers:**
 
@@ -101,8 +101,8 @@
 
 **Tests:**
 
-- [ ] T037 [P] [US1] Write unit tests for heap page verification (valid page, corrupted ItemId, TD mismatch, ItemId state violations) in `tests/unittest/ut_dfx/ut_heap_page_verify.cpp`
-- [ ] T038 [P] [US1] Write unit tests for index page verification (valid page, high key violation, unsorted keys, bad special region) in `tests/unittest/ut_dfx/ut_index_page_verify.cpp`
+- [X] T037 [P] [US1] Write unit tests for heap page verification (valid page, corrupted ItemId, TD mismatch, ItemId state violations) in `tests/unittest/ut_dfx/ut_heap_page_verify.cpp`
+- [X] T038 [P] [US1] Write unit tests for index page verification (valid page, high key violation, unsorted keys, bad special region) in `tests/unittest/ut_dfx/ut_index_page_verify.cpp`
 - [ ] T039 [P] [US1] Write unit tests for all-zero page handling (uninitialized page should pass lightweight, not be flagged as corruption) in `tests/unittest/ut_dfx/ut_page_verify_registry.cpp`
 
 **Checkpoint**: All 17 PageTypes have registered lightweight + heavyweight verifiers. Inline verification active on write path when GUC enabled. Single page verification is fully functional and independently testable.
