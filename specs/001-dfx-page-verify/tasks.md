@@ -68,14 +68,14 @@
 
 **FSM module verifiers:**
 
-- [ ] T022 [P] [US1] Implement lightweight and heavyweight verifiers for FSM_PAGE_TYPE and FSM_META_PAGE_TYPE in `src/page/dstore_fsm_page_verify.cpp` — heavyweight: FSM entry validity, tree structure consistency, listRange ordering, numTotalPages >= numUsedPages
-- [ ] T023 [P] [US1] Register FSM and FSM_META verifiers in `src/page/dstore_fsm_page_verify.cpp`
+- [X] T022 [P] [US1] Implement lightweight and heavyweight verifiers for FSM_PAGE_TYPE and FSM_META_PAGE_TYPE in `src/page/dstore_fsm_page_verify.cpp` — heavyweight: FSM entry validity, tree structure consistency, listRange ordering, numTotalPages >= numUsedPages
+- [X] T023 [P] [US1] Register FSM and FSM_META verifiers in `src/page/dstore_fsm_page_verify.cpp`
 
 **Undo module verifiers:**
 
-- [ ] T024 [P] [US1] Implement lightweight and heavyweight verifiers for UNDO_PAGE_TYPE in `src/undo/dstore_undo_page_verify.cpp` — heavyweight: UndoRecordPageHeader prev/next chain format, undo record header validity (UndoType not UNKNOWN, valid ctid, file version)
-- [ ] T025 [P] [US1] Implement lightweight and heavyweight verifiers for TRANSACTION_SLOT_PAGE in `src/undo/dstore_undo_page_verify.cpp` — heavyweight: slot status validity (7 valid states), CSN-status consistency, nextFreeLogicSlotId bounds
-- [ ] T026 [P] [US1] Register Undo and TransactionSlot verifiers in `src/undo/dstore_undo_page_verify.cpp`
+- [X] T024 [P] [US1] Implement lightweight and heavyweight verifiers for UNDO_PAGE_TYPE in `src/undo/dstore_undo_page_verify.cpp` — heavyweight: UndoRecordPageHeader prev/next chain format, undo record header validity (UndoType not UNKNOWN, valid ctid, file version)
+- [X] T025 [P] [US1] Implement lightweight and heavyweight verifiers for TRANSACTION_SLOT_PAGE in `src/undo/dstore_undo_page_verify.cpp` — heavyweight: slot status validity (7 valid states), CSN-status consistency, nextFreeLogicSlotId bounds
+- [X] T026 [P] [US1] Register Undo and TransactionSlot verifiers in `src/undo/dstore_undo_page_verify.cpp`
 
 **Segment meta verifiers:**
 
