@@ -1,5 +1,6 @@
 .idea
-.claude
+.claude/settings.local.json
+.claude/projects/
 .DS_Store
 tmp_build
 output
