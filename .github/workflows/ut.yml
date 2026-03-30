@@ -5,83 +5,225 @@ on:
     branches: [main]
 
 jobs:
-  ut:
+  ut-buffer:
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/developdstore/open-dstore-ci:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-
     defaults:
       run:
         shell: bash
-
     env:
       BUILD_ROOT: ${{ github.workspace }}
       LOCAL_LIB_PATH: /opt/project/local_libs
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Build utils
+      - uses: actions/checkout@v4
+      - name: Build
         run: |
           source ${BUILD_ROOT}/buildenv
-          cd ${BUILD_ROOT}/utils
-          bash build.sh -m release
-
-      - name: Build dstore (debug with UT)
-        run: |
-          source ${BUILD_ROOT}/buildenv
-          cd ${BUILD_ROOT}
-          mkdir -p tmp_build && cd tmp_build
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
           cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
           make -sj$(nproc) install
-
-      - name: "UT: Buffer"
+      - name: Run Buffer UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
           make run_dstore_buffer_unittest
 
-      - name: "UT: Transaction"
+  ut-transaction:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/developdstore/open-dstore-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
+          cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
+          make -sj$(nproc) install
+      - name: Run Transaction UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
           make run_dstore_xact_unittest
 
-      - name: "UT: Index"
+  ut-index:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/developdstore/open-dstore-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
+          cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
+          make -sj$(nproc) install
+      - name: Run Index UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
           make run_dstore_index_unittest
 
-      - name: "UT: Lock"
+  ut-lock:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/developdstore/open-dstore-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
+          cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
+          make -sj$(nproc) install
+      - name: Run Lock UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
           make run_dstore_lock_unittest
 
-      - name: "UT: HA (WAL/Recovery)"
+  ut-ha:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/developdstore/open-dstore-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
+          cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
+          make -sj$(nproc) install
+      - name: Run HA UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
           make run_dstore_ha_unittest
 
-      - name: "UT: Framework"
+  ut-framework:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/developdstore/open-dstore-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
+          cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
+          make -sj$(nproc) install
+      - name: Run Framework UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
           make run_dstore_framework_unittest
 
-      - name: "UT: Data Manager"
+  ut-datamanager:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/developdstore/open-dstore-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
+          cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
+          make -sj$(nproc) install
+      - name: Run Data Manager UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
           make run_dstore_datamanager_unittest
 
-      - name: "UT: Index and Undo"
+  ut-undo:
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/developdstore/open-dstore-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      BUILD_ROOT: ${{ github.workspace }}
+      LOCAL_LIB_PATH: /opt/project/local_libs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          source ${BUILD_ROOT}/buildenv
+          cd ${BUILD_ROOT}/utils && bash build.sh -m release
+          cd ${BUILD_ROOT} && mkdir -p tmp_build && cd tmp_build
+          cmake .. -DCMAKE_BUILD_TYPE=debug -DUTILS_PATH=../utils/output -DENABLE_UT=ON
+          make -sj$(nproc) install
+      - name: Run Undo UT
         run: |
           source ${BUILD_ROOT}/buildenv
           cd ${BUILD_ROOT}/tmp_build
