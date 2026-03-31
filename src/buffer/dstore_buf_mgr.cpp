@@ -64,7 +64,7 @@ namespace {
 
 RetStatus VerifyPageBeforePersist(Page *page)
 {
-    if (page == nullptr || !IsPageVerifierRegistered(page->GetType())) {
+    if (page == nullptr || GetDfxVerifyLevel() == VerifyLevel::OFF || !IsPageVerifierRegistered(page->GetType())) {
         return DSTORE_SUCC;
     }
 

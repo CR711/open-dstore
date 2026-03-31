@@ -103,7 +103,7 @@
 
 - [X] T037 [P] [US1] Write unit tests for heap page verification (valid page, corrupted ItemId, TD mismatch, ItemId state violations) in `tests/unittest/ut_dfx/ut_heap_page_verify.cpp`
 - [X] T038 [P] [US1] Write unit tests for index page verification (valid page, high key violation, unsorted keys, bad special region) in `tests/unittest/ut_dfx/ut_index_page_verify.cpp`
-- [ ] T039 [P] [US1] Write unit tests for all-zero page handling (uninitialized page should pass lightweight, not be flagged as corruption) in `tests/unittest/ut_dfx/ut_page_verify_registry.cpp`
+- [X] T039 [P] [US1] Write unit tests for all-zero page handling (uninitialized page should pass lightweight, not be flagged as corruption) in `tests/unittest/ut_dfx/ut_page_verify_registry.cpp`
 
 **Checkpoint**: All 17 PageTypes have registered lightweight + heavyweight verifiers. Inline verification active on write path when GUC enabled. Single page verification is fully functional and independently testable.
 

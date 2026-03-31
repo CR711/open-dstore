@@ -208,6 +208,14 @@ RetStatus HeapUpdateHandler::BeginUpdate(HeapUpdateContext *updateContext)
         return DSTORE_FAIL;
     }
 
+    if (unlikely(updateContext->newTuple == nullptr)) {
+        ErrLog(DSTORE_ERROR, MODULE_HEAP, ErrMsg("New tuple is nullptr when begin update, ctid({%hu, %u}, %hu)",
+            updateContext->oldCtid.GetFileId(), updateContext->oldCtid.GetBlockNum(),
+            updateContext->oldCtid.GetOffset()));
+        storage_set_error(HEAP_ERROR_INPUT_PARAM_WRONG);
+        return DSTORE_FAIL;
+    }
+
     m_isBigTuple = page->GetDiskTuple(updateContext->oldCtid.GetOffset())->IsLinked() ||
         HeapPage::TupBiggerThanPage(updateContext->newTuple);
 
