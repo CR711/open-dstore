@@ -332,20 +332,12 @@ TEST_F(UTTransactionTest, TransactionGetTacTransactionState_level0)
     ASSERT_EQ(trxState, TACTransactionState::TAC_TRX_ABORTED);
 }
 
-#define MOCKER_CPP(api, TT) MOCKCPP_NS::mockAPI(#api, reinterpret_cast<TT>(api))
-
-Transaction *MockGetActiveTransaction()
-{
-    return nullptr;
-}
-
 #define TRANSACTION_ERROR_RUNTIME_NOT_INITIALIZED "Transacton runtime is not initialized."
 
 TEST_F(UTTransactionTest, TransactionNullptr_level0)
 {
-    MOCKER_CPP(&TransactionList::GetActiveTransaction, Transaction* (*)())
-        .stubs()
-        .will(invoke(MockGetActiveTransaction));
+    Transaction *savedTrx = thrd->GetTransactionList().m_activeTransaction;
+    thrd->GetTransactionList().m_activeTransaction = nullptr;
     RetStatus ret;
     CommitSeqNo csn;
     CommandId cid;
@@ -479,7 +471,7 @@ TEST_F(UTTransactionTest, TransactionNullptr_level0)
     TransactionInterface::SetCurTxnBlockState(state);
     err = StorageGetMessage();
     ASSERT_STREQ(err, TRANSACTION_ERROR_RUNTIME_NOT_INITIALIZED);
-    GlobalMockObject::verify();
+    thrd->GetTransactionList().m_activeTransaction = savedTrx;
 }
 
 TEST_F(UTTransactionTest, TransactionInterfaceTest2_level0)

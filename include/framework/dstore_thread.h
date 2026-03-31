@@ -420,6 +420,11 @@ public:
         return m_transactionList.GetActiveTransaction();
     }
 
+    inline TransactionList &GetTransactionList()
+    {
+        return m_transactionList;
+    }
+
     inline class Transaction *GetTopTransaction()
     {
         return m_transactionList.GetTopTransaction();
