@@ -125,22 +125,56 @@ SET dfx_verify_level = 'OFF';
 
 ## 6. US 闭环回归门禁
 
-每个 user story 闭环前，必须在标准构建环境中重新执行以下 8 个官方 UT 目标：
+每个 user story 闭环前，必须在容器内使用干净、串行的 debug UT 构建环境重新执行以下 8 个官方 UT 目标。
+
+推荐流程：
 
 ```bash
+rm -rf tmp_build
+source buildenv
+cd utils && bash build.sh -m debug && cd ..
+bash build.sh -m debug -tm ut
 cd tmp_build
+```
+
+随后执行以下 8 个官方 UT 目标：
+
+```bash
 make run_dstore_buffer_unittest
-make run_dstore_datamanager_unittest
-make run_dstore_framework_unittest
-make run_dstore_ha_unittest
+make run_dstore_xact_unittest
 make run_dstore_index_unittest
 make run_dstore_lock_unittest
-make run_dstore_xact_unittest
-make run_dstore_undo_unittest
+make run_dstore_ha_unittest
+make run_dstore_framework_unittest
+make run_dstore_datamanager_unittest
+make run_dstore_index_and_undo_unittest
 ```
 
 执行约束：
 
 - 未通过时，不进入下一个 user story。
-- 本地 macOS + Docker 环境下，如果 `run_dstore_xact_unittest` 的唯一失败是 `UTTransactionTest.TransactionNullptr_level0`，可暂按已知基线环境问题忽略；其他失败仍然阻塞推进。
+- 不要在运行中的容器构建或 UT 任务之间切换分支、复用旧的 `tmp_build`，也不要并发执行会重建 `tmp_build` 的命令。
+- 如果需要单独复核失败用例，也要在同一轮干净 debug 构建完成后，在 `tmp_build` 目录下直接运行 `./bin/unittest --gtest_filter=<case>`，不要额外切换到其他重建流程。
 - 完成一轮门禁验证后，先做 checkpoint commit，再继续下一批实现。
+
+## 7. US 闭环后的主线同步
+
+每个 user story 闭环后，在继续下一个 story 之前，先询问是否执行一次主线同步，以避免当前功能分支与 `main` 偏离过大。
+
+推荐顺序：
+
+```bash
+git stash push -u
+git checkout main
+git pull --ff-only origin main
+git checkout <feature-branch>
+git rebase main
+git stash pop
+```
+
+执行约束：
+
+- 只有在当前 UT 门禁收尾后再执行，避免与运行中的容器构建/测试共享同一工作区。
+- `stash` 使用 `-u`，确保未跟踪的 spec/实现文件也一起保留。
+- `rebase` 完成并恢复工作区后，再做一次 checkpoint commit。
+- 每次执行前，先和需求方确认是否现在就做这一步。

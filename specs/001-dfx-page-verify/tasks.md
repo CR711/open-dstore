@@ -117,13 +117,13 @@
 
 ### Implementation for User Story 2
 
-- [ ] T040 [P] [US2] Define HeapVerifyOptions struct and HeapSegmentVerifier class interface in `include/dfx/dstore_heap_verify.h`
-- [ ] T041 [US2] Implement HeapSegmentVerifier core: sequential scan of all heap pages in segment, per-tuple format validation (size vs column count, null bitmap length, tuple does not overflow allocated space) in `src/dfx/dstore_heap_verify.cpp`
-- [ ] T042 [US2] Implement big tuple chain verification in HeapSegmentVerifier: traverse linked tuple chunks following CTIDs, validate m_linkInfo progression (FIRST_CHUNK → NOT_FIRST_CHUNK), verify chunk count matches header, detect broken chains in `src/dfx/dstore_heap_verify.cpp`
-- [ ] T043 [US2] Implement FSM-heap consistency check in HeapSegmentVerifier: for each heap page, compare actual free space (from page header upper-lower) with FSM-recorded free space category, report significant discrepancies in `src/dfx/dstore_heap_verify.cpp`
-- [ ] T044 [US2] Implement visibility handling in HeapSegmentVerifier: when isOnline=true, use SNAPSHOT_MVCC to skip in-progress/aborted tuples, log skipped tuples at INFO level in `src/dfx/dstore_heap_verify.cpp`
-- [ ] T045 [US2] Expose VerifyHeapSegment() public function in `src/dfx/dstore_heap_verify.cpp`
-- [ ] T046 [P] [US2] Write unit tests for heap segment verification (valid segment, corrupted tuple, broken big tuple chain, FSM mismatch) in `tests/unittest/ut_dfx/ut_heap_segment_verify.cpp`
+- [X] T040 [P] [US2] Define HeapVerifyOptions struct and HeapSegmentVerifier class interface in `include/dfx/dstore_heap_verify.h`
+- [X] T041 [US2] Implement HeapSegmentVerifier core: sequential scan of all heap pages in segment, per-tuple format validation (size vs column count, null bitmap length, tuple does not overflow allocated space) in `src/dfx/dstore_heap_verify.cpp`
+- [X] T042 [US2] Implement big tuple chain verification in HeapSegmentVerifier: traverse linked tuple chunks following CTIDs, validate m_linkInfo progression (FIRST_CHUNK → NOT_FIRST_CHUNK), verify chunk count matches header, detect broken chains in `src/dfx/dstore_heap_verify.cpp`
+- [X] T043 [US2] Implement FSM-heap consistency check in HeapSegmentVerifier: for each heap page, compare actual free space (from page header upper-lower) with FSM-recorded free space category, report significant discrepancies in `src/dfx/dstore_heap_verify.cpp`
+- [X] T044 [US2] Implement visibility handling in HeapSegmentVerifier: when isOnline=true, use SNAPSHOT_MVCC to skip in-progress/aborted tuples, log skipped tuples at INFO level in `src/dfx/dstore_heap_verify.cpp`
+- [X] T045 [US2] Expose VerifyHeapSegment() public function in `src/dfx/dstore_heap_verify.cpp`
+- [X] T046 [P] [US2] Write unit tests for heap segment verification (valid segment, corrupted tuple, broken big tuple chain, FSM mismatch) in `tests/unittest/ut_dfx/ut_heap_segment_verify.cpp`
 
 **Checkpoint**: Heap segment verification fully functional — tuple format, big tuple chains, FSM consistency all tested independently.
 
