@@ -162,13 +162,13 @@
 
 ### Implementation for User Story 4
 
-- [ ] T059 [P] [US4] Define SegmentVerifyOptions struct and SegmentVerifier class interface in `include/dfx/dstore_segment_verify.h`
-- [ ] T060 [US4] Implement SegmentVerifier extent chain walk: follow nextExtMetaPageId links from segment meta, validate magic number, extent size per dynamic sizing rules, chain terminates (no broken or circular links via visitedPages) in `src/dfx/dstore_segment_verify.cpp`
-- [ ] T061 [US4] Implement segment metadata validation: magic number, segment type (HEAP/INDEX/UNDO/TEMP), totalBlockCount matches sum of extent sizes, dataFirst/dataLast consistency with actual data in `src/dfx/dstore_segment_verify.cpp`
-- [ ] T062 [US4] Implement extent-bitmap consistency check: for each extent in segment chain, verify corresponding bit is set in TbsBitmapPage, verify no overlap between different segments' extents, verify allocatedExtentCount matches actual bits in `src/dfx/dstore_segment_verify.cpp`
-- [ ] T063 [US4] Implement index segment leaf page count verification: traverse level-0 sibling links and count actual leaf pages, compare with expected count from metadata in `src/dfx/dstore_segment_verify.cpp`
-- [ ] T064 [US4] Expose VerifySegment() public function in `src/dfx/dstore_segment_verify.cpp`
-- [ ] T065 [P] [US4] Write unit tests for segment verification (valid segment, broken extent chain, circular chain detection, bitmap mismatch, leaf page count mismatch) in `tests/unittest/ut_dfx/ut_segment_verify.cpp`
+- [X] T059 [P] [US4] Define SegmentVerifyOptions struct and SegmentVerifier class interface in `include/dfx/dstore_segment_verify.h`
+- [X] T060 [US4] Implement SegmentVerifier extent chain walk: follow nextExtMetaPageId links from segment meta, validate magic number, extent size per dynamic sizing rules, chain terminates (no broken or circular links via visitedPages) in `src/dfx/dstore_segment_verify.cpp`
+- [X] T061 [US4] Implement segment metadata validation: magic number, segment type (HEAP/INDEX/UNDO/TEMP), totalBlockCount matches sum of extent sizes, dataFirst/dataLast consistency with actual data in `src/dfx/dstore_segment_verify.cpp`
+- [X] T062 [US4] Implement extent-bitmap consistency check: for each extent in segment chain, verify corresponding bit is set in TbsBitmapPage, verify no overlap between different segments' extents, verify allocatedExtentCount matches actual bits in `src/dfx/dstore_segment_verify.cpp`
+- [X] T063 [US4] Implement index segment leaf page count verification: traverse level-0 sibling links and count actual leaf pages, compare with expected count from metadata in `src/dfx/dstore_segment_verify.cpp`
+- [X] T064 [US4] Expose VerifySegment() public function in `src/dfx/dstore_segment_verify.cpp`
+- [X] T065 [P] [US4] Write unit tests for segment verification (valid segment, broken extent chain, circular chain detection, bitmap mismatch, leaf page count mismatch) in `tests/unittest/ut_dfx/ut_segment_verify.cpp`
 
 **Checkpoint**: Segment verification fully functional — extent chain, metadata, bitmap consistency, and leaf page count all tested independently.
 
