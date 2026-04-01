@@ -137,18 +137,18 @@
 
 ### Implementation for User Story 3
 
-- [ ] T047 [P] [US3] Define BtreeVerifyOptions struct and BtreeVerifier class interface in `include/dfx/dstore_btree_verify.h`
-- [ ] T048 [US3] Implement BtreeVerifier level-by-level traversal: from root page, descend to each level, walk sibling links at each level (referencing PostgreSQL amcheck's bt_check_every_level → bt_check_level_from_leftmost pattern) in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T049 [US3] Implement per-page structural checks in BtreeVerifier: validate BtrPageLinkAndStatus, level consistency, bidirectional sibling link agreement (page.next.prev == page), split status handling in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T050 [US3] Implement high key and intra-page key ordering check: high key at offset 1 >= all keys, tuples sorted within page in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T051 [US3] Implement same-level cross-page key ordering: validate keys are monotonically ordered across sibling pages at the same level, no violation at page boundaries in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T052 [US3] Implement parent-child key consistency: for each internal page tuple, verify that the downlink child page's first tuple (or high key) matches the parent's key in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T053 [US3] Implement index-heap 1:1 correspondence check: for each leaf entry, verify heap tuple exists at referenced ItemPointer; optionally reverse-check that visible heap tuples have index entries in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T054 [US3] Implement index-heap data value consistency with sampling: when checkDataConsistency=true, randomly select pages at configured sampleRatio, for selected pages compare all index key values against heap tuple column values in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T055 [US3] Implement online visibility handling: when isOnline=true, use SNAPSHOT_MVCC, skip in-progress tuples from cross-reference mismatch detection in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T056 [US3] Implement cycle detection in sibling link traversal using VerifyContext.visitedPages in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T057 [US3] Expose VerifyBtreeIndex() public function in `src/dfx/dstore_btree_verify.cpp`
-- [ ] T058 [P] [US3] Write unit tests for btree verification (valid tree, broken sibling link, key ordering violation, high key violation, parent-child mismatch, index-heap mismatch) in `tests/unittest/ut_dfx/ut_btree_verify.cpp`
+- [X] T047 [P] [US3] Define BtreeVerifyOptions struct and BtreeVerifier class interface in `include/dfx/dstore_btree_verify.h`
+- [X] T048 [US3] Implement BtreeVerifier level-by-level traversal: from root page, descend to each level, walk sibling links at each level (referencing PostgreSQL amcheck's bt_check_every_level → bt_check_level_from_leftmost pattern) in `src/dfx/dstore_btree_verify.cpp`
+- [X] T049 [US3] Implement per-page structural checks in BtreeVerifier: validate BtrPageLinkAndStatus, level consistency, bidirectional sibling link agreement (page.next.prev == page), split status handling in `src/dfx/dstore_btree_verify.cpp`
+- [X] T050 [US3] Implement high key and intra-page key ordering check: high key at offset 1 >= all keys, tuples sorted within page in `src/dfx/dstore_btree_verify.cpp`
+- [X] T051 [US3] Implement same-level cross-page key ordering: validate keys are monotonically ordered across sibling pages at the same level, no violation at page boundaries in `src/dfx/dstore_btree_verify.cpp`
+- [X] T052 [US3] Implement parent-child key consistency: for each internal page tuple, verify that the downlink child page's first tuple (or high key) matches the parent's key in `src/dfx/dstore_btree_verify.cpp`
+- [X] T053 [US3] Implement index-heap 1:1 correspondence check: for each leaf entry, verify heap tuple exists at referenced ItemPointer; optionally reverse-check that visible heap tuples have index entries in `src/dfx/dstore_btree_verify.cpp`
+- [X] T054 [US3] Implement index-heap data value consistency with sampling: when checkDataConsistency=true, randomly select pages at configured sampleRatio, for selected pages compare all index key values against heap tuple column values in `src/dfx/dstore_btree_verify.cpp`
+- [X] T055 [US3] Implement online visibility handling: when isOnline=true, use SNAPSHOT_MVCC, skip in-progress tuples from cross-reference mismatch detection in `src/dfx/dstore_btree_verify.cpp`
+- [X] T056 [US3] Implement cycle detection in sibling link traversal using VerifyContext.visitedPages in `src/dfx/dstore_btree_verify.cpp`
+- [X] T057 [US3] Expose VerifyBtreeIndex() public function in `src/dfx/dstore_btree_verify.cpp`
+- [X] T058 [P] [US3] Write unit tests for btree verification (valid tree, broken sibling link, key ordering violation, high key violation, parent-child mismatch, index-heap mismatch) in `tests/unittest/ut_dfx/ut_btree_verify.cpp`
 
 **Checkpoint**: B-tree verification fully functional — structural checks, cross-page key ordering, index-heap 1:1 and data consistency all tested independently.
 
