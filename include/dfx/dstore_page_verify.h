@@ -3,8 +3,14 @@
 
 #include <array>
 #include <atomic>
+#include <vector>
+#include "dfx/dstore_btree_verify.h"
+#include "dfx/dstore_heap_verify.h"
+#include "dfx/dstore_metadata_verify.h"
+#include "dfx/dstore_segment_verify.h"
 #include "dfx/dstore_verify_report.h"
 #include "page/dstore_page.h"
+#include "systable/dstore_relation.h"
 
 namespace DSTORE {
 
@@ -36,6 +42,20 @@ private:
     std::array<bool, PAGE_TYPE_COUNT> m_registered{};
 };
 
+struct TableVerifyOptions {
+    VerifyLevel pageLevel{VerifyLevel::HEAVYWEIGHT};
+    BtreeVerifyOptions btreeOptions;
+    HeapVerifyOptions heapOptions;
+    SegmentVerifyOptions segmentOptions;
+    bool checkPage{true};
+    bool checkBtree{true};
+    bool checkHeap{true};
+    bool checkSegment{true};
+    bool checkMetadata{true};
+    const MetadataInputStruct *metadata{nullptr};
+    std::vector<StorageRelation> indexRelations;
+};
+
 RetStatus RegisterPageVerifier(
     PageType type, const char *typeName, PageVerifyFunc lightweightFunc, PageVerifyFunc heavyweightFunc);
 void RegisterHeapPageVerifier();
@@ -50,6 +70,7 @@ void InitPageVerifiers();
 RetStatus VerifyPageInline(const Page *page);
 RetStatus VerifyPageInlineWithReport(const Page *page, VerifyReport *report);
 RetStatus VerifyPage(const Page *page, VerifyLevel level, VerifyReport *report);
+RetStatus VerifyTable(StorageRelation heapRel, const TableVerifyOptions &options, VerifyReport *report);
 bool IsPageVerifierRegistered(PageType type);
 
 void SetDfxVerifyLevel(VerifyLevel level);

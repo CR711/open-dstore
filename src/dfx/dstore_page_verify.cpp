@@ -1,4 +1,9 @@
 #include "dfx/dstore_page_verify.h"
+#include "buffer/dstore_buf_mgr.h"
+#include "framework/dstore_instance.h"
+#include "framework/dstore_thread.h"
+#include "heap/dstore_heap_handler.h"
+#include "index/dstore_btree.h"
 
 namespace DSTORE {
 
@@ -23,6 +28,66 @@ bool IsModuleEnabledForPage(PageType type)
             break;
     }
     return module == VerifyModule::ALL || module == targetModule;
+}
+
+BufMgrInterface *ResolveVerifyBufMgr(StorageRelation relation)
+{
+    if (relation != nullptr && DstoreRelationIsTemp(relation) && thrd != nullptr) {
+        BufMgrInterface *tmpBufMgr = thrd->GetTmpLocalBufMgr();
+        if (tmpBufMgr != nullptr) {
+            return tmpBufMgr;
+        }
+    }
+    return g_storageInstance == nullptr ? nullptr : g_storageInstance->GetBufferMgr();
+}
+
+RetStatus MergeRetStatus(RetStatus lhs, RetStatus rhs)
+{
+    return (lhs == DSTORE_SUCC && rhs == DSTORE_SUCC) ? DSTORE_SUCC : DSTORE_FAIL;
+}
+
+RetStatus VerifyPageById(BufMgrInterface *bufMgr, PdbId pdbId, const PageId &pageId, VerifyLevel level, VerifyReport *report)
+{
+    if (bufMgr == nullptr || !pageId.IsValid() || level == VerifyLevel::OFF) {
+        return DSTORE_SUCC;
+    }
+
+    BufferDesc *bufferDesc = bufMgr->Read(pdbId, pageId, LW_SHARED);
+    if (bufferDesc == nullptr) {
+        if (report != nullptr) {
+            report->AddResult(VerifySeverity::ERROR_LEVEL, "page", pageId, "page_read_failed", 1, 0,
+                "Failed to read page for verification");
+        }
+        return DSTORE_FAIL;
+    }
+
+    RetStatus status = VerifyPage(bufferDesc->GetPage(), level, report);
+    bufMgr->UnlockAndRelease(bufferDesc);
+    return status;
+}
+
+RetStatus VerifyRelationSegment(
+    BufMgrInterface *bufMgr, StorageRelation relation, const SegmentVerifyOptions &options, VerifyReport *report)
+{
+    if (bufMgr == nullptr || relation == nullptr) {
+        return DSTORE_FAIL;
+    }
+
+    PageId segmentMetaPageId = INVALID_PAGE_ID;
+    if (relation->tableSmgr != nullptr) {
+        segmentMetaPageId = relation->tableSmgr->GetSegMetaPageId();
+    } else if (relation->btreeSmgr != nullptr) {
+        segmentMetaPageId = relation->btreeSmgr->GetSegMetaPageId();
+    }
+
+    if (!segmentMetaPageId.IsValid()) {
+        if (report != nullptr) {
+            report->AddResult(VerifySeverity::ERROR_LEVEL, "segment", INVALID_PAGE_ID, "segment_meta_missing", 1, 0,
+                "Relation does not have a valid segment meta page");
+        }
+        return DSTORE_FAIL;
+    }
+    return VerifySegment(bufMgr, segmentMetaPageId, options, report);
 }
 
 }  // namespace
@@ -192,6 +257,69 @@ RetStatus VerifyPage(const Page *page, VerifyLevel level, VerifyReport *report)
         return DSTORE_SUCC;
     }
     return g_pageVerifyRegistry.Verify(page, level, report);
+}
+
+RetStatus VerifyTable(StorageRelation heapRel, const TableVerifyOptions &options, VerifyReport *report)
+{
+    if (heapRel == nullptr || report == nullptr) {
+        return DSTORE_FAIL;
+    }
+
+    BufMgrInterface *bufMgr = ResolveVerifyBufMgr(heapRel);
+    if (bufMgr == nullptr) {
+        report->AddResult(VerifySeverity::ERROR_LEVEL, "table", INVALID_PAGE_ID, "buffer_manager_missing", 1, 0,
+            "Buffer manager is not available for table verification");
+        return DSTORE_FAIL;
+    }
+
+    RetStatus overallStatus = DSTORE_SUCC;
+    const PdbId pdbId = heapRel->m_pdbId;
+
+    if (options.checkPage && options.pageLevel != VerifyLevel::OFF) {
+        if (heapRel->tableSmgr != nullptr) {
+            overallStatus = MergeRetStatus(
+                overallStatus, VerifyPageById(bufMgr, pdbId, heapRel->tableSmgr->GetSegMetaPageId(), options.pageLevel, report));
+        }
+        if (heapRel->lobTableSmgr != nullptr) {
+            overallStatus = MergeRetStatus(
+                overallStatus, VerifyPageById(bufMgr, pdbId, heapRel->lobTableSmgr->GetSegMetaPageId(), options.pageLevel, report));
+        }
+    }
+
+    if (options.checkSegment) {
+        overallStatus = MergeRetStatus(
+            overallStatus, VerifyRelationSegment(bufMgr, heapRel, options.segmentOptions, report));
+    }
+
+    if (options.checkHeap) {
+        overallStatus = MergeRetStatus(
+            overallStatus, VerifyHeapSegment(bufMgr, heapRel, options.heapOptions, report));
+    }
+
+    for (StorageRelation indexRel : options.indexRelations) {
+        if (indexRel == nullptr) {
+            continue;
+        }
+        if (options.checkPage && options.pageLevel != VerifyLevel::OFF && indexRel->btreeSmgr != nullptr) {
+            overallStatus = MergeRetStatus(overallStatus,
+                VerifyPageById(bufMgr, indexRel->m_pdbId, indexRel->btreeSmgr->GetSegMetaPageId(), options.pageLevel, report));
+        }
+        if (options.checkSegment) {
+            overallStatus = MergeRetStatus(
+                overallStatus, VerifyRelationSegment(bufMgr, indexRel, options.segmentOptions, report));
+        }
+        if (options.checkBtree) {
+            overallStatus = MergeRetStatus(
+                overallStatus, VerifyBtreeIndex(indexRel, heapRel, options.btreeOptions, report));
+        }
+    }
+
+    if (options.checkMetadata && options.metadata != nullptr) {
+        overallStatus = MergeRetStatus(
+            overallStatus, VerifyMetadataConsistency(bufMgr, *options.metadata, report));
+    }
+
+    return report->HasError() ? DSTORE_FAIL : overallStatus;
 }
 
 bool IsPageVerifierRegistered(PageType type)
