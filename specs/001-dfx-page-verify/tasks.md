@@ -182,11 +182,11 @@
 
 ### Implementation for User Story 5
 
-- [ ] T066 [P] [US5] Define MetadataInputStruct, IndexMetaEntry structs and MetadataVerifier interface in `include/dfx/dstore_metadata_verify.h`
-- [ ] T067 [US5] Implement MetadataVerifier: validate heap segment exists and type is HEAP, validate LOB segment exists (if non-INVALID) and type correct, validate tablespace ID consistency in `src/dfx/dstore_metadata_verify.cpp`
-- [ ] T068 [US5] Implement index metadata verification in MetadataVerifier: for each IndexMetaEntry, verify index segment exists, type is INDEX, BtrMeta.nkeyAtts matches nKeyAtts, BtrMeta.attTypeIds matches provided attTypeIds in `src/dfx/dstore_metadata_verify.cpp`
-- [ ] T069 [US5] Expose VerifyMetadataConsistency() public function in `src/dfx/dstore_metadata_verify.cpp`
-- [ ] T070 [P] [US5] Write unit tests for metadata verification (valid metadata, missing segment, wrong segment type, attribute mismatch) in `tests/unittest/ut_dfx/ut_metadata_verify.cpp`
+- [X] T066 [P] [US5] Define MetadataInputStruct, IndexMetaEntry structs and MetadataVerifier interface in `include/dfx/dstore_metadata_verify.h`
+- [X] T067 [US5] Implement MetadataVerifier: validate heap segment exists and type is HEAP, validate LOB segment exists (if non-INVALID) and type correct, validate tablespace ID consistency in `src/dfx/dstore_metadata_verify.cpp`
+- [X] T068 [US5] Implement index metadata verification in MetadataVerifier: for each IndexMetaEntry, verify index segment exists, type is INDEX, BtrMeta.nkeyAtts matches nKeyAtts, BtrMeta.attTypeIds matches provided attTypeIds in `src/dfx/dstore_metadata_verify.cpp`
+- [X] T069 [US5] Expose VerifyMetadataConsistency() public function in `src/dfx/dstore_metadata_verify.cpp`
+- [X] T070 [P] [US5] Write unit tests for metadata verification (valid metadata, missing segment, wrong segment type, attribute mismatch) in `tests/unittest/ut_dfx/ut_metadata_verify.cpp`
 
 **Checkpoint**: Metadata consistency verification fully functional — dstore-side interface ready for upper layer integration.
 
