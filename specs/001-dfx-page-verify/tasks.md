@@ -198,8 +198,8 @@
 
 - [X] T071 Implement VerifyTable() aggregation function in `src/dfx/dstore_page_verify.cpp` — orchestrate single page + heap segment + btree + segment + metadata verification via TableVerifyOptions
 - [X] T072 Implement CLI tool main entry in `tools/dstore_verify/dstore_verify_main.cpp` — argument parsing (--table, --segment, --page, --level, --check-btree, --check-heap, --check-segment, --check-extent, --sample-ratio, --max-errors, --format, --all), offline page reader (direct file read/mmap bypassing buffer manager), dispatch to appropriate verify functions, output VerifyReport in text/json format, exit codes (0/1/2/3)
-- [ ] T073 Verify build: ensure `make` compiles all new sources, links dfx library, builds dstore_verify tool, runs all ut_dfx tests successfully
-- [ ] T074 Run full test suite: execute all ut_dfx tests, verify no regressions in existing ut_* tests
+- [X] T073 Verify build: ensure `make` compiles all new sources, links dfx library, builds dstore_verify tool, runs all ut_dfx tests successfully
+- [X] T074 Run full test suite: execute all ut_dfx tests, verify no regressions in existing ut_* tests
 
 ---
 
