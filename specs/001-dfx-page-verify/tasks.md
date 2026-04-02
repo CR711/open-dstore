@@ -201,6 +201,13 @@
 - [X] T073 Verify build: ensure `make` compiles all new sources, links dfx library, builds dstore_verify tool, runs all ut_dfx tests successfully
 - [X] T074 Run full test suite: execute all ut_dfx tests, verify no regressions in existing ut_* tests
 
+### Deferred CLI TODOs
+
+- [ ] T075 Implement offline relation/table resolution for `dstore_verify --table <oid>` — reconstruct `StorageRelation`/index metadata from datadir so table-level verification can run without a live dstore instance
+- [ ] T076 Implement offline full-table aggregation for `dstore_verify --all` — enumerate verifiable tables/segments from datadir instead of reporting unsupported for relation-dependent paths
+- [ ] T077 Implement offline `--check-btree` and `--check-heap` relation-driven flows — support these options without requiring online relation/cache/catalog services
+- [ ] T078 Add CLI coverage tests and documentation updates for offline unsupported vs supported paths — verify exit codes, output, and error messages for `--table/--all/--check-btree/--check-heap`
+
 ---
 
 ## Dependencies & Execution Order
