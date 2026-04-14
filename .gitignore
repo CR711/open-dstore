@@ -5,6 +5,7 @@
 .DS_Store
 Thumbs.db
 tmp_build
+tmp_build_sysbench
 build/
 bin/
 out/

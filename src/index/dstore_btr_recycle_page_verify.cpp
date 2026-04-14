@@ -9,11 +9,12 @@ namespace DSTORE {
 namespace {
 
 RetStatus ReportBtrRecycleError(VerifyReport *report, const Page *page, const char *checkName, uint64 expected,
-    uint64 actual, const char *message)
+    uint64 actual, const char *message, VerifyCode code)
 {
     if (report != nullptr) {
-        report->AddResult(VerifySeverity::ERROR_LEVEL, "page", page->GetSelfPageId(), checkName, expected, actual, "%s",
-            message);
+        const PageId pageId = (page != nullptr) ? page->GetSelfPageId() : INVALID_PAGE_ID;
+        report->AddResultWithCode(
+            VerifySeverity::SEVERITY_ERROR, code, "page", pageId, checkName, expected, actual, "%s", message);
     }
     return DSTORE_FAIL;
 }
@@ -32,19 +33,20 @@ const BtrQueuePageMeta *GetQueuePageMeta(const BtrQueuePage *queuePage)
 RetStatus VerifyBtrQueuePageLightweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
-    BtrQueuePage *queuePage = const_cast<BtrQueuePage *>(static_cast<const BtrQueuePage *>(page));
+    const BtrQueuePage *queuePage = static_cast<const BtrQueuePage *>(page);
     const uint16 expectedSpecialOffset = static_cast<uint16>(BLCKSZ - MAXALIGN(sizeof(BtrQueuePageMeta)));
 
     if (queuePage->GetSpecialOffset() != expectedSpecialOffset) {
         return ReportBtrRecycleError(report, queuePage, "btr_queue_special_offset_invalid", expectedSpecialOffset,
-            queuePage->GetSpecialOffset(), "Btree recycle queue page special offset is invalid");
+            queuePage->GetSpecialOffset(), "Btree recycle queue page special offset is invalid",
+            VerifyCode::PAGE_BOUNDARY_INVALID);
     }
 
     const BtrQueuePageMeta *meta = GetQueuePageMeta(queuePage);
     if (!IsValidQueueType(meta->GetType())) {
         return ReportBtrRecycleError(report, queuePage, "btr_queue_type_invalid",
             static_cast<uint64>(BtrRecycleQueueType::FREE), static_cast<uint64>(meta->GetType()),
-            "Btree recycle queue page type is invalid");
+            "Btree recycle queue page type is invalid", VerifyCode::BTR_QUEUE_INCONSISTENT);
     }
 
     return DSTORE_SUCC;
@@ -52,25 +54,35 @@ RetStatus VerifyBtrQueuePageLightweight(const Page *page, VerifyLevel level, Ver
 
 RetStatus VerifyBtrQueuePageHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
-    RetStatus ret = VerifyBtrQueuePageLightweight(page, level, report);
-    BtrQueuePage *queuePage = const_cast<BtrQueuePage *>(static_cast<const BtrQueuePage *>(page));
+    (void)level;
+    RetStatus ret = DSTORE_SUCC;
+    const BtrQueuePage *queuePage = static_cast<const BtrQueuePage *>(page);
 
     const BtrQueuePageMeta *meta = GetQueuePageMeta(queuePage);
     if (meta->GetType() == BtrRecycleQueueType::RECYCLE) {
-        RecyclablePageQueue *queue = queuePage->GetQueue<RecyclablePageQueue>();
-        if (queue->GetSize() > queue->GetCapacity()) {
+        const RecyclablePageQueue *queue = queuePage->GetQueue<RecyclablePageQueue>();
+        if (queue == nullptr) {
+            ret = ReportBtrRecycleError(report, queuePage, "btr_recycle_queue_null", 1, 0,
+                "Btree recycle queue page GetQueue returned null", VerifyCode::BTR_QUEUE_INCONSISTENT);
+        } else if (queue->GetSize() > queue->GetCapacity()) {
             ret = ReportBtrRecycleError(report, queuePage, "btr_recycle_queue_size_invalid", queue->GetCapacity(),
-                queue->GetSize(), "Btree recycle queue page size exceeds queue capacity");
+                queue->GetSize(), "Btree recycle queue page size exceeds queue capacity", VerifyCode::BTR_QUEUE_INCONSISTENT);
         }
     } else {
-        ReusablePageQueue *queue = queuePage->GetQueue<ReusablePageQueue>();
-        if (queue->GetSize() > queue->GetCapacity()) {
-            ret = ReportBtrRecycleError(report, queuePage, "btr_free_queue_size_invalid", queue->GetCapacity(),
-                queue->GetSize(), "Btree free queue page size exceeds queue capacity");
-        }
-        if (queue->numAllocatedSlots > queue->GetCapacity()) {
-            ret = ReportBtrRecycleError(report, queuePage, "btr_free_queue_slots_invalid", queue->GetCapacity(),
-                queue->numAllocatedSlots, "Btree free queue page allocated slot count exceeds queue capacity");
+        const ReusablePageQueue *queue = queuePage->GetQueue<ReusablePageQueue>();
+        if (queue == nullptr) {
+            ret = ReportBtrRecycleError(report, queuePage, "btr_free_queue_null", 1, 0,
+                "Btree free queue page GetQueue returned null", VerifyCode::BTR_QUEUE_INCONSISTENT);
+        } else {
+            if (queue->GetSize() > queue->GetCapacity()) {
+                ret = ReportBtrRecycleError(report, queuePage, "btr_free_queue_size_invalid", queue->GetCapacity(),
+                    queue->GetSize(), "Btree free queue page size exceeds queue capacity", VerifyCode::BTR_QUEUE_INCONSISTENT);
+            }
+            if (queue->numAllocatedSlots > queue->GetCapacity()) {
+                ret = ReportBtrRecycleError(report, queuePage, "btr_free_queue_slots_invalid", queue->GetCapacity(),
+                    queue->numAllocatedSlots, "Btree free queue page allocated slot count exceeds queue capacity",
+                    VerifyCode::BTR_QUEUE_INCONSISTENT);
+            }
         }
     }
 
@@ -84,7 +96,7 @@ RetStatus VerifyBtrRecyclePartitionMetaLightweight(const Page *page, VerifyLevel
 
     if (metaPage->createdXid == INVALID_XID) {
         return ReportBtrRecycleError(report, metaPage, "btr_recycle_partition_xid_invalid", 1, 0,
-            "Btree recycle partition meta page must keep a valid created xid");
+            "Btree recycle partition meta page must keep a valid created xid", VerifyCode::PAGE_BOUNDARY_INVALID);
     }
 
     return DSTORE_SUCC;
@@ -92,17 +104,18 @@ RetStatus VerifyBtrRecyclePartitionMetaLightweight(const Page *page, VerifyLevel
 
 RetStatus VerifyBtrRecyclePartitionMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
-    RetStatus ret = VerifyBtrRecyclePartitionMetaLightweight(page, level, report);
+    (void)level;
+    RetStatus ret = DSTORE_SUCC;
     const BtrRecyclePartitionMetaPage *metaPage = static_cast<const BtrRecyclePartitionMetaPage *>(page);
 
     if (metaPage->accessTimestamp == 0) {
         ret = ReportBtrRecycleError(report, metaPage, "btr_recycle_partition_timestamp_invalid", 1, 0,
-            "Btree recycle partition meta page access timestamp must be initialized");
+            "Btree recycle partition meta page access timestamp must be initialized", VerifyCode::PAGE_BOUNDARY_INVALID);
     }
 
     if (metaPage->recycleQueueHead == metaPage->GetSelfPageId() || metaPage->freeQueueHead == metaPage->GetSelfPageId()) {
         ret = ReportBtrRecycleError(report, metaPage, "btr_recycle_partition_self_link_invalid", 0, 1,
-            "Btree recycle partition meta page queue heads must not point to itself");
+            "Btree recycle partition meta page queue heads must not point to itself", VerifyCode::PAGE_ID_INVALID);
     }
 
     return ret;
@@ -115,7 +128,7 @@ RetStatus VerifyBtrRecycleRootMetaLightweight(const Page *page, VerifyLevel leve
 
     if (metaPage->GetCreatedXid() == INVALID_XID) {
         return ReportBtrRecycleError(report, metaPage, "btr_recycle_root_xid_invalid", 1, 0,
-            "Btree recycle root meta page must keep a valid created xid");
+            "Btree recycle root meta page must keep a valid created xid", VerifyCode::PAGE_BOUNDARY_INVALID);
     }
 
     return DSTORE_SUCC;
@@ -123,14 +136,15 @@ RetStatus VerifyBtrRecycleRootMetaLightweight(const Page *page, VerifyLevel leve
 
 RetStatus VerifyBtrRecycleRootMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
-    RetStatus ret = VerifyBtrRecycleRootMetaLightweight(page, level, report);
-    BtrRecycleRootMetaPage *metaPage = const_cast<BtrRecycleRootMetaPage *>(static_cast<const BtrRecycleRootMetaPage *>(page));
+    (void)level;
+    RetStatus ret = DSTORE_SUCC;
+    const BtrRecycleRootMetaPage *metaPage = static_cast<const BtrRecycleRootMetaPage *>(page);
 
     for (uint16 i = 0; i < MAX_BTR_RECYCLE_PARTITION; ++i) {
         const PageId partMetaPageId = metaPage->GetRecyclePartitionMetaPageId(i);
         if (partMetaPageId == metaPage->GetSelfPageId()) {
             ret = ReportBtrRecycleError(report, metaPage, "btr_recycle_root_partition_self_link_invalid", 0, i + 1,
-                "Btree recycle root meta page partition entry must not point to itself");
+                "Btree recycle root meta page partition entry must not point to itself", VerifyCode::PAGE_ID_INVALID);
             break;
         }
     }
@@ -143,11 +157,11 @@ RetStatus VerifyBtrRecycleRootMetaHeavyweight(const Page *page, VerifyLevel leve
 void RegisterBtrRecyclePageVerifiers()
 {
     (void)RegisterPageVerifier(PageType::BTR_QUEUE_PAGE_TYPE, "BtrQueuePage",
-        VerifyBtrQueuePageLightweight, VerifyBtrQueuePageHeavyweight);
+        VerifyModule::INDEX, VerifyBtrQueuePageLightweight, nullptr, VerifyBtrQueuePageHeavyweight);
     (void)RegisterPageVerifier(PageType::BTR_RECYCLE_PARTITION_META_PAGE_TYPE, "BtrRecyclePartitionMetaPage",
-        VerifyBtrRecyclePartitionMetaLightweight, VerifyBtrRecyclePartitionMetaHeavyweight);
+        VerifyModule::INDEX, VerifyBtrRecyclePartitionMetaLightweight, nullptr, VerifyBtrRecyclePartitionMetaHeavyweight);
     (void)RegisterPageVerifier(PageType::BTR_RECYCLE_ROOT_META_PAGE_TYPE, "BtrRecycleRootMetaPage",
-        VerifyBtrRecycleRootMetaLightweight, VerifyBtrRecycleRootMetaHeavyweight);
+        VerifyModule::INDEX, VerifyBtrRecycleRootMetaLightweight, nullptr, VerifyBtrRecycleRootMetaHeavyweight);
 }
 
 }  // namespace DSTORE

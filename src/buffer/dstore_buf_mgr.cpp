@@ -64,12 +64,40 @@ namespace {
 
 RetStatus VerifyPageBeforePersist(Page *page)
 {
-    if (page == nullptr || GetDfxVerifyLevel() == VerifyLevel::OFF || !IsPageVerifierRegistered(page->GetType())) {
+    VerifyLevel level = GetDfxVerifyLevel();
+    if (page == nullptr || level == VerifyLevel::NONE || !IsPageVerifierRegistered(page->GetType())) {
         return DSTORE_SUCC;
     }
 
     page->SetChecksum();
-    return VerifyPageInline(page);
+    return VerifyPageOnWrite(page, level);
+}
+
+RetStatus VerifyPageAfterRead(Page *page)
+{
+    VerifyLevel level = GetDfxVerifyLevel();
+    if (page == nullptr || level == VerifyLevel::NONE || !IsPageVerifierRegistered(page->GetType())) {
+        return DSTORE_SUCC;
+    }
+
+    /* Fast path: verify without report allocation */
+    RetStatus ret = VerifyPageOnRead(page, level, nullptr);
+    if (STORAGE_FUNC_SUCC(ret)) {
+        return DSTORE_SUCC;
+    }
+
+    /* Slow path: re-verify with report for diagnostics */
+    VerifyReport report;
+    RetStatus retryRet = VerifyPageOnRead(page, level, &report);
+    if (STORAGE_FUNC_SUCC(retryRet)) {
+        return DSTORE_SUCC;  /* page was concurrently fixed between the two checks */
+    }
+    std::string msg = report.FormatText();
+    ErrLog(DSTORE_ERROR, MODULE_BUFMGR,
+        ErrMsg("[PAGE_VERIFY_FAILED] Page verify failed on read path: pageId=%u.%u, %s",
+            page->GetSelfPageId().m_fileId, page->GetSelfPageId().m_blockId, msg.c_str()));
+    storage_set_error(BUFFER_ERROR_PAGE_VERIFY_FAILED);
+    return ret;
 }
 
 }  // namespace
@@ -485,6 +513,13 @@ READ:
         "bufTag:(%hhu, %hu, %u) ReadBlock lsnInfo(walId %lu glsn %lu plsn %lu)",
         bufTag.pdbId, pageId.m_fileId, pageId.m_blockId, page->GetWalId(), page->GetGlsn(), page->GetPlsn()));
     stat->ReportDataIOTimeRecord(&startTime, false);
+
+    /* 3. DFX page verify on read path: CRC is handled by StorageReleasePanic above (PANIC on corruption),
+     * DFX framework supplements with non-CRC checks (boundary, LSN, page-type-specific) and returns ERROR. */
+    if (STORAGE_FUNC_FAIL(VerifyPageAfterRead(page))) {
+        return DSTORE_FAIL;
+    }
+
     return ret;
 }
 
@@ -3849,6 +3884,16 @@ static void FlushDirtyPageUnderLockIfRetry(Page *page, const BufferTag &bufTag, 
     }
     VFSAdapter *vfs = storagePdb->GetVFS();
     StorageReleasePanic(vfs == nullptr, MODULE_BUFMGR, ErrMsg("vfs is nullptr, pdb %u", bufTag.pdbId));
+
+    /*
+     * AIO retry path: the original async write failed and we fall back to sync write.
+     * Must verify page integrity before persist, same as WriteBlock and WriteBlockAsync,
+     * to prevent corrupted pages from reaching disk via this retry bypass.
+     */
+    if (STORAGE_FUNC_FAIL(VerifyPageBeforePersist(page))) {
+        return;  /* VerifyPageBeforePersist already issues PANIC internally; defensive return */
+    }
+
     if (STORAGE_FUNC_FAIL(vfs->WritePageSync(bufTag.pageId, page))) {
         ErrLog(DSTORE_PANIC, MODULE_BUFMGR, ErrMsg(
             "Retry Sync Flush Pageid %hu-%u failed, error:%lld",

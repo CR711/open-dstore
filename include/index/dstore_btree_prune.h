@@ -209,6 +209,7 @@ protected:
     TDAllocContext m_tdContext;
     uint8 m_fixedTdCount;
     uint8 m_origTdCount;
+    bool m_canCompactTds{true}; /* false when in-progress TDs exist, blocks TD compaction but allows tuple prune */
 
     /*
      * Valid when we are deleting an indextuple of an internal page.

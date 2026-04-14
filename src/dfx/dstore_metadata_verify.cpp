@@ -93,7 +93,7 @@ RetStatus MetadataVerifier::Verify()
     SegmentType heapSegmentType = SegmentType::HEAP_SEGMENT_TYPE;
     SegmentType indexSegmentType = SegmentType::INDEX_SEGMENT_TYPE;
     if (!ResolveExpectedSegmentTypes(&heapSegmentType, &indexSegmentType)) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, INVALID_PAGE_ID, "metadata_segment_type_invalid", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, INVALID_PAGE_ID, "metadata_segment_type_invalid", 1, 0,
             "Failed to resolve expected segment types from metadata input");
         return DSTORE_FAIL;
     }
@@ -120,7 +120,7 @@ RetStatus MetadataVerifier::VerifySegmentMetadata(
     const PageId &segmentMetaPageId, SegmentType expectedSegmentType, const char *checkPrefix)
 {
     if (!segmentMetaPageId.IsValid()) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPageId, "segment_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPageId, "segment_missing", 1, 0,
             "%s is invalid", checkPrefix);
         return DSTORE_FAIL;
     }
@@ -128,7 +128,7 @@ RetStatus MetadataVerifier::VerifySegmentMetadata(
     BufferDesc *bufferDesc = INVALID_BUFFER_DESC;
     SegmentMetaPage *segmentMetaPage = m_pageSource->ReadSegmentMetaPage(segmentMetaPageId, &bufferDesc);
     if (segmentMetaPage == nullptr) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPageId, "segment_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPageId, "segment_missing", 1, 0,
             "Failed to read %s metadata page (%hu,%u)", checkPrefix, segmentMetaPageId.m_fileId,
             segmentMetaPageId.m_blockId);
         return DSTORE_FAIL;
@@ -136,13 +136,13 @@ RetStatus MetadataVerifier::VerifySegmentMetadata(
 
     RetStatus ret = DSTORE_SUCC;
     TablespaceId actualTablespaceId = INVALID_TABLESPACE_ID;
-    if (VerifyPage(segmentMetaPage, VerifyLevel::HEAVYWEIGHT, m_context->GetReport()) != DSTORE_SUCC) {
+    if (VerifyPage(segmentMetaPage, VerifyLevel::HEAVY, m_context->GetReport()) != DSTORE_SUCC) {
         ret = DSTORE_FAIL;
         goto out;
     }
 
     if (segmentMetaPage->segmentHeader.segmentType != expectedSegmentType) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPageId, "segment_type_mismatch",
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPageId, "segment_type_mismatch",
             static_cast<uint64>(expectedSegmentType), static_cast<uint64>(segmentMetaPage->segmentHeader.segmentType),
             "%s type %u mismatches expected type %u", checkPrefix,
             static_cast<uint8>(segmentMetaPage->segmentHeader.segmentType), static_cast<uint8>(expectedSegmentType));
@@ -153,7 +153,7 @@ RetStatus MetadataVerifier::VerifySegmentMetadata(
     if (m_input.tablespaceId != INVALID_TABLESPACE_ID &&
         m_pageSource->GetTablespaceId(segmentMetaPageId.m_fileId, &actualTablespaceId) == DSTORE_SUCC &&
         actualTablespaceId != m_input.tablespaceId) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPageId, "tablespace_mismatch", m_input.tablespaceId,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPageId, "tablespace_mismatch", m_input.tablespaceId,
             actualTablespaceId, "%s file %hu belongs to tablespace %hu, expected %hu", checkPrefix,
             segmentMetaPageId.m_fileId, actualTablespaceId, m_input.tablespaceId);
         ret = DSTORE_FAIL;
@@ -179,7 +179,7 @@ RetStatus MetadataVerifier::VerifyIndexMetadata(const IndexMetaEntry &indexEntry
     BufferDesc *bufferDesc = INVALID_BUFFER_DESC;
     BtrPage *metaPage = m_pageSource->ReadBtreeMetaPage(indexEntry.segmentMetaPageId, &bufferDesc);
     if (metaPage == nullptr) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, indexEntry.segmentMetaPageId, "index_meta_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, indexEntry.segmentMetaPageId, "index_meta_missing", 1, 0,
             "Failed to read btree meta page for index segment (%hu,%u)", indexEntry.segmentMetaPageId.m_fileId,
             indexEntry.segmentMetaPageId.m_blockId);
         return DSTORE_FAIL;
@@ -187,14 +187,14 @@ RetStatus MetadataVerifier::VerifyIndexMetadata(const IndexMetaEntry &indexEntry
 
     RetStatus ret = DSTORE_SUCC;
     BtrMeta *btrMeta = nullptr;
-    if (VerifyPage(metaPage, VerifyLevel::HEAVYWEIGHT, m_context->GetReport()) != DSTORE_SUCC) {
+    if (VerifyPage(metaPage, VerifyLevel::HEAVY, m_context->GetReport()) != DSTORE_SUCC) {
         ret = DSTORE_FAIL;
         goto out;
     }
 
     btrMeta = static_cast<BtrMeta *>(static_cast<void *>(metaPage->GetData()));
     if (btrMeta->GetNkeyatts() != indexEntry.nKeyAtts) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, metaPage->GetSelfPageId(), "index_key_attr_count_mismatch",
+        ReportResult(VerifySeverity::SEVERITY_ERROR, metaPage->GetSelfPageId(), "index_key_attr_count_mismatch",
             indexEntry.nKeyAtts, btrMeta->GetNkeyatts(),
             "Btree meta key attr count %hu mismatches metadata input %hu", btrMeta->GetNkeyatts(),
             indexEntry.nKeyAtts);
@@ -203,7 +203,7 @@ RetStatus MetadataVerifier::VerifyIndexMetadata(const IndexMetaEntry &indexEntry
     }
 
     if (indexEntry.attTypeIds.size() != indexEntry.nKeyAtts) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, metaPage->GetSelfPageId(), "index_attr_type_count_mismatch",
+        ReportResult(VerifySeverity::SEVERITY_ERROR, metaPage->GetSelfPageId(), "index_attr_type_count_mismatch",
             indexEntry.nKeyAtts, indexEntry.attTypeIds.size(),
             "Metadata input provides %lu attribute types for %hu key attributes",
             indexEntry.attTypeIds.size(), indexEntry.nKeyAtts);
@@ -213,7 +213,7 @@ RetStatus MetadataVerifier::VerifyIndexMetadata(const IndexMetaEntry &indexEntry
 
     for (uint16 i = 0; i < indexEntry.nKeyAtts; ++i) {
         if (btrMeta->GetAttTypids(i) != indexEntry.attTypeIds[i]) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, metaPage->GetSelfPageId(), "index_attr_type_mismatch",
+            ReportResult(VerifySeverity::SEVERITY_ERROR, metaPage->GetSelfPageId(), "index_attr_type_mismatch",
                 indexEntry.attTypeIds[i], btrMeta->GetAttTypids(i),
                 "Btree meta attribute type at key %hu mismatches metadata input", i);
             ret = DSTORE_FAIL;

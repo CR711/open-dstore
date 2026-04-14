@@ -1,0 +1,35 @@
+{
+    "tables":            1,
+    "table_size":    10000,
+    "threads":           8,
+    "time":             60,
+    "warmup_time":      10,
+    "report_interval":  10,
+    "range_size":      100,
+
+    "point_selects":    10,
+    "simple_ranges":     1,
+    "sum_ranges":        1,
+    "order_ranges":      1,
+    "distinct_ranges":   1,
+    "index_updates":     1,
+    "non_index_updates": 1,
+    "delete_inserts":    1,
+
+    "skip_trx":          0,
+    "secondary":         0,
+    "auto_inc":          1,
+    "mode":    "read_write",
+    "command":       "all",
+
+    "verify_level":   "LIGHT",
+    "verify_modules": "heap,index,undo",
+    "verify_on_write": true,
+    "verify_on_read":  true,
+
+    "fault_inject_enabled": false,
+    "fault_inject_time":    30,
+    "fault_type":           "crc_error",
+    "fault_target_module":  "heap",
+    "fault_target_page":    0
+}

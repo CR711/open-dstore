@@ -46,12 +46,12 @@
 
 ## R4: Configuration via GUC Parameters
 
-**Decision**: 定义两个 GUC 参数：`dfx_verify_level`（OFF/LIGHTWEIGHT/HEAVYWEIGHT）和 `dfx_verify_module`（HEAP/INDEX/ALL）。运行时动态生效。轻量级校验在 inline 路径上根据 GUC 值决定是否执行。
+**Decision**: 定义两个 GUC 参数：`dfx_verify_level`（NONE/LIGHT/MEDIUM/HEAVY）和 `dfx_verify_module`（HEAP/INDEX/ALL）。运行时动态生效。轻量级校验在写/读路径上根据 GUC 值决定是否执行。[v1 terms: OFF/LIGHTWEIGHT/HEAVYWEIGHT, deprecated]
 
 **Rationale**:
 - 参考 PostgreSQL 的 lock-mode 分级思路，但简化为 GUC 参数（更直接）
 - MySQL CHECK TABLE 的 QUICK/MEDIUM/EXTENDED 三级也是同样的渐进深度思路
-- 运行时动态可调适合生产环境：平时 OFF 或 LIGHTWEIGHT，排查问题时提升到 HEAVYWEIGHT
+- 运行时动态可调适合生产环境：平时 NONE 或 LIGHT，排查问题时提升到 HEAVY
 
 **Alternatives considered**:
 - 编译期宏开关（`#ifdef ENABLE_VERIFY`）：无法运行时调整

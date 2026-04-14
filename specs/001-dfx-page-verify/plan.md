@@ -32,21 +32,26 @@
 
 ```text
 specs/001-dfx-page-verify/
-├── spec.md              # 需求规格
-├── plan.md              # 本文件
-├── research.md          # 研究结论
-├── data-model.md        # 数据模型
-├── quickstart.md        # 快速上手
+├── spec.md                          # 需求规格
+├── plan.md                          # 本文件
+├── research.md                      # 研究结论
+├── data-model.md                    # 数据模型（v3.0 已同步）
+├── design-single-page-verify.md      # 单页面校验设计（v1 + v3.0 合并）
+├── design-cross-page-verify.md      # 跨页面校验设计
+├── quickstart.md                    # 快速上手
+├── test-strategy.md                 # 测试策略
 ├── contracts/
-│   └── page-verify-api.md  # API 契约
-└── tasks.md             # 任务列表（/speckit.tasks 生成）
+│   └── page-verify-api.md           # API 契约（精简版）
+├── checklists/
+│   └── requirements.md              # 需求检查清单
+└── tasks.md                         # 任务列表
 ```
 
 ### Source Code (repository root)
 
 ```text
 include/dfx/                          # 校验框架头文件
-├── dstore_page_verify.h              # 核心框架：Registry, VerifyLevel, VerifyModule, VerifyPageInline
+├── dstore_page_verify.h              # 核心框架：Registry, VerifyLevel, VerifyModule, VerifyPageOnWrite/OnRead/Full
 ├── dstore_verify_report.h            # VerifyReport, VerifyResult, VerifySeverity
 ├── dstore_verify_context.h           # VerifyContext（跨页面校验共享上下文）
 ├── dstore_btree_verify.h             # BtreeVerifier + BtreeVerifyOptions
@@ -99,7 +104,7 @@ tests/unittest/ut_dfx/               # 校验框架单元测试
                     │   Inline Call Sites       │
                     │ (CRUD, FlushDirty, etc.)  │
                     └──────────┬───────────────┘
-                               │ VerifyPageInline(page)
+                               │ VerifyPageOnWrite(page)
                                ▼
                     ┌──────────────────────────┐
                     │  GUC Check               │
@@ -233,7 +238,7 @@ void InitPageVerifiers()
 
 | Parameter | Type | Default | Values |
 |-----------|------|---------|--------|
-| `dfx_verify_level` | enum | OFF | OFF, LIGHTWEIGHT, HEAVYWEIGHT |
+| `dfx_verify_level` | enum | NONE | NONE, LIGHT, MEDIUM, HEAVY |
 | `dfx_verify_module` | enum | ALL | HEAP, INDEX, ALL |
 
 - 存储在现有 GUC 框架中（如有）或作为全局变量 + SET 命令处理

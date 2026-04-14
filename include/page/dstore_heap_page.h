@@ -140,6 +140,11 @@ public:
         return static_cast<HeapDiskTuple *>(GetRowData(offset));
     }
 
+    inline const HeapDiskTuple *GetDiskTuple(OffsetNumber offset) const
+    {
+        return static_cast<const HeapDiskTuple *>(GetRowData(offset));
+    }
+
     inline TdId GetTupleTdId(OffsetNumber offset)
     {
         return DataPage::GetTupleTdId<HeapDiskTuple>(offset);

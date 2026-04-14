@@ -15,6 +15,9 @@
   // Keep the container alive (overrides the image's own CMD)
   "overrideCommand": true,
 
+  // Container resource limits
+  "runArgs": ["--memory=10g", "--memory-swap=10g"],
+
   // Environment variables available to CLion and all terminals inside the container
   "remoteEnv": {
     "BUILD_ROOT": "/opt/project/dstore",

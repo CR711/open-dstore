@@ -69,6 +69,7 @@ void BtreePagePrune::Init()
 {
     m_isPagePrunable = true;
     m_prunedAll = true;
+    m_canCompactTds = true;
     m_tdContext.Init(this->GetPdbId(), NeedWal());
     m_origTdCount = m_pagePayload.GetPage()->GetTdCount();
     m_fixedTdCount = m_origTdCount;
@@ -264,8 +265,9 @@ RetStatus BtreePagePrune::ScanActiveTds()
             if (td->TestStatus(TDStatus::OCCUPY_TRX_END)) {
                 reusableTdCount++;
             } else {
-                /* In-progress transaction exists, cannot prune page */
-                m_isPagePrunable = false;
+                /* In-progress transaction exists, cannot compact TD space.
+                 * However, committed dead tuples can still be pruned. */
+                m_canCompactTds = false;
             }
         }
         if (tdId == 0U) {
@@ -282,7 +284,7 @@ RetStatus BtreePagePrune::ScanActiveTds()
                   m_pagePayload.GetPageId().m_fileId, m_pagePayload.GetPageId().m_blockId, lastActiveTdId + 1,
                   m_origTdCount));
 
-    if (!m_isPagePrunable ||                                /* In-progress transaction exists. Cannot prune. */
+    if (!m_canCompactTds ||                                 /* In-progress transaction exists. Cannot compact TDs. */
         lastActiveTdId == m_origTdCount - 1 ||              /* Found no frozen td. No need to prune. */
         m_origTdCount < DEFAULT_TD_COUNT + EXTEND_TD_NUM) { /* Or TD space has not been extended. */
         return DSTORE_SUCC;
@@ -357,11 +359,12 @@ bool BtreePagePrune::IsTuplePrunable(OffsetNumber offnum, bool checkCsn)
      */
     if (tuple->TestTdStatus(ATTACH_TD_AS_NEW_OWNER) && td->TestStatus(TDStatus::OCCUPY_TRX_IN_PROGRESS)) {
         if (xidStatus.IsInProgress()) {
-            /* A page cannot be pruned if it contains any open transaction. */
+            /* Tuple has an in-progress transaction. Skip this tuple but allow pruning other committed dead tuples.
+             * Undo rollback uses BinarySearch by key value, so offset renumbering from CompactItems is safe. */
             ErrLog(DSTORE_DEBUG1, MODULE_INDEX,
-                ErrMsg("Btree page{%hu, %u} is unprunable since transaction on tuple (offnum = %hu) is in-progress.",
+                ErrMsg("Btree page{%hu, %u} tuple (offnum = %hu) skipped: transaction in-progress.",
                        m_pagePayload.GetPageId().m_fileId, m_pagePayload.GetPageId().m_blockId, offnum));
-            m_isPagePrunable = false;
+            m_prunedAll = false;
             return false;
         }
     }

@@ -37,7 +37,7 @@ struct CliOptions {
     std::string metadataFile;
     PageId pageId{INVALID_PAGE_ID};
     PageId segmentId{INVALID_PAGE_ID};
-    VerifyLevel level{VerifyLevel::HEAVYWEIGHT};
+    VerifyLevel level{VerifyLevel::HEAVY};
     CliFormat format{CliFormat::TEXT};
     float sampleRatio{1.0F};
     uint32 maxErrors{1000};
@@ -364,11 +364,11 @@ bool ParseLevel(const char *input, VerifyLevel *level)
         return false;
     }
     if (std::strcmp(input, "lw") == 0) {
-        *level = VerifyLevel::LIGHTWEIGHT;
+        *level = VerifyLevel::LIGHT;
         return true;
     }
     if (std::strcmp(input, "hw") == 0) {
-        *level = VerifyLevel::HEAVYWEIGHT;
+        *level = VerifyLevel::HEAVY;
         return true;
     }
     return false;

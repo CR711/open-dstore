@@ -25,6 +25,7 @@
  */
 #include "index/dstore_btree_vacuum.h"
 #include "index/dstore_btree_prune.h"
+#include "index/dstore_btree_page_recycle.h"
 
 namespace DSTORE {
 
@@ -78,6 +79,15 @@ RetStatus BtreeVacuum::BtreeLazyVacuum()
         if (bpageMeta->TestType(BtrPageType::LEAF_PAGE)) {
             BtreePagePrune prunePage(m_indexRel, m_indexInfo, nullptr, bufferDesc);
             UNUSED_VARIABLE(prunePage.Prune(INVALID_ITEM_OFFSET_NUMBER));
+            /* After prune, if the page is empty (no live data tuples), immediately start recycle pipeline.
+             * PutIntoRecycleQueueIfEmpty handles all buffer release, so skip the UnlockAndRelease below. */
+            if (prunePage.IsPagePrunable() && bpage->GetNonDeletedTupleNum() == 0 &&
+                !bpageMeta->IsRightmost() && !bpageMeta->IsRoot()) {
+                BtreePageRecycle recycle(m_indexRel);
+                UNUSED_VARIABLE(recycle.PutIntoRecycleQueueIfEmpty(bufferDesc));
+                curPageId = m_segScanContext->GetNextPageId();
+                continue;
+            }
         }
 
         m_bufMgr->UnlockAndRelease(bufferDesc);

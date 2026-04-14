@@ -41,7 +41,7 @@ Single page verification provides two levels:
   - **Extent meta pages**: Magic number (EXTENT_META_MAGIC), extent size validity, next pointer format
 
 **Verification is configurable** via a runtime GUC parameter (dynamic, no restart required):
-- **Verification level**: OFF (no verification), LIGHTWEIGHT, HEAVYWEIGHT
+- **Verification level**: NONE (no verification), LIGHT, MEDIUM, HEAVY [v1 terms: OFF/LIGHTWEIGHT/HEAVYWEIGHT, deprecated]
 - **Verification module**: HEAP, INDEX, ALL (selects which page types are verified)
 
 **Invocation modes**:
@@ -179,7 +179,7 @@ The metadata passed from the upper layer includes:
 
 **Configuration:**
 
-- **FR-007**: Verification level MUST be configurable via a runtime GUC parameter (dynamic, no restart required) with values: OFF (no verification), LIGHTWEIGHT, HEAVYWEIGHT.
+- **FR-007**: Verification level MUST be configurable via a runtime GUC parameter (dynamic, no restart required) with values: NONE (no verification), LIGHT, MEDIUM, HEAVY. [v1 terms: OFF/LIGHTWEIGHT/HEAVYWEIGHT, deprecated]
 - **FR-008**: Verification module MUST be configurable via a runtime GUC parameter with values: HEAP, INDEX, ALL, allowing selective verification of specific page type families.
 
 **Cross-Page Verification — Index-Heap Consistency:**
@@ -235,7 +235,7 @@ The metadata passed from the upper layer includes:
 - **FSM (Free Space Map)**: Multi-level tree tracking free space categories for heap pages. Each heap page references its FSM slot via FsmIndex.
 - **Tablespace Bitmap**: Tracks extent allocation across the tablespace. Each bit represents one extent. allocatedExtentCount must match the number of set bits.
 - **Metadata Input Struct**: A dstore-defined structure for receiving upper-layer (InnoDB) metadata, containing segment IDs, tablespace IDs, table OID, index OID, and row format information.
-- **Verification Config**: Runtime GUC parameters controlling verification level (OFF/LIGHTWEIGHT/HEAVYWEIGHT) and module scope (HEAP/INDEX/ALL).
+- **Verification Config**: Runtime GUC parameters controlling verification level (NONE/LIGHT/MEDIUM/HEAVY) and module scope (HEAP/INDEX/ALL). [v1 terms: OFF/LIGHTWEIGHT/HEAVYWEIGHT, deprecated]
 
 ## Success Criteria *(mandatory)*
 
@@ -256,3 +256,63 @@ The metadata passed from the upper layer includes:
 - **SC-013**: Full verification of a single table completes without impacting concurrent read/write operations on the same table.
 - **SC-014**: All verification diagnostics include sufficient detail (page IDs, offset numbers, expected vs actual values, severity) for an operator to locate and understand the issue without additional investigation.
 - **SC-015**: The standalone CLI tool can perform heavyweight verification on data files without requiring a running dstore instance (offline mode).
+
+## 设计补充与勘误（源自实现反馈）
+
+以下条目来源于实现阶段的 Code Review 和 UT 编写过程，属于原始设计中遗漏或描述不精确的约束，已作为直接修正合入本文档。仅收录设计层面的发现，纯代码 bug 不在此列。
+
+### DC-001: DataSegmentMetaPage 合法 Segment Type 为 4 种（非单一类型）
+
+- **影响范围**: US1 (FR-006)、Segment meta pages 校验
+- **原始描述**: FR-006 要求 "segment meta magic/type" 校验，但未明确 `DATA_SEGMENT_META_PAGE_TYPE` 对应的合法 `SegmentType` 集合。
+- **修正后约束**: `DataSegmentMetaPage` 的合法 `SegmentType` 为以下 4 种白名单值：`HEAP_SEGMENT_TYPE`、`INDEX_SEGMENT_TYPE`、`HEAP_TEMP_SEGMENT_TYPE`、`INDEX_TEMP_SEGMENT_TYPE`。校验时不能硬编码单一类型，必须采用白名单匹配。类型不在白名单内应报 `SEG_SEGMENT_TYPE_INVALID`。
+- **发现来源**: Batch 1, 修复 1a（已合入本文档）
+
+### DC-002: HeapSegmentMetaPage 合法 Segment Type 为 2 种
+
+- **影响范围**: US1 (FR-006)、Segment meta pages 校验
+- **原始描述**: 同 DC-001，未区分 HeapSegmentMetaPage 的合法类型子集。
+- **修正后约束**: `HeapSegmentMetaPage` 的合法 `SegmentType` 为：`HEAP_SEGMENT_TYPE`、`HEAP_TEMP_SEGMENT_TYPE`。不接受 `INDEX_SEGMENT_TYPE` 等非 Heap 类型。
+- **发现来源**: Batch 1, 修复 1b（已合入本文档）
+
+### DC-003: Undo Record 最小序列化大小为 10 字节
+
+- **影响范围**: US1 (FR-006)、Undo pages heavyweight 校验
+- **原始描述**: FR-006 要求校验 "undo record header validity (valid UndoType, ctid, file version)"，但未定义 undo record 的最小合法大小，导致实现中仅检查 `serializeSize == 0` 而遗漏了更小但仍非法的值（1~9 字节），造成越界读和无符号整数下溢。
+- **修正后约束**: Undo record 的最小合法序列化大小为 **10 字节**，由 `sizeof(uint8)/*serializeSize*/ + sizeof(UndoType)/*1B*/ + sizeof(uint64)/*fileVersion*/ = 10` 组成。`serializeSize < 10` 应视为页面损坏。此常量应定义为 `UNDO_RECORD_MIN_SERIALIZE_SIZE` 并在校验逻辑中使用。
+- **发现来源**: Batch 1, 修复 1.2（已合入本文档）
+
+### DC-004: 写路径与读路径校验强制 LIGHT 级别
+
+- **影响范围**: FR-003、FR-007、Configuration 设计
+- **原始描述**: FR-007 定义校验级别为 OFF / LIGHTWEIGHT / HEAVYWEIGHT，FR-003 要求 lightweight 可在 CRUD 和 flush 路径内联调用。但未明确说明：当 GUC 设为 HEAVYWEIGHT 时，写路径和读路径是否执行 HEAVY 级别校验。
+- **修正后约束**: `VerifyPageOnWrite()` 和 `VerifyPageOnRead()` 中，`level` 参数**仅用于判断是否跳过校验**（`NONE` 时跳过），实际执行时**强制使用 LIGHT 级别**，不会因 GUC 设为更高级别而在热路径上执行 MEDIUM/HEAVY 校验。HEAVY 级别仅通过 `VerifyPageFull()` 或 CLI 工具触发。此设计确保写/读热路径的性能可控。
+- **发现来源**: Batch 2, 修复 2.2（已合入本文档）
+
+### DC-005: PageVerifyRegistry 注册函数无并发保护，仅限启动阶段调用
+
+- **影响范围**: FR-001、General 架构
+- **原始描述**: spec 未约束 `Register()` 的调用时机和线程安全性。
+- **修正后约束**: `PageVerifyRegistry::Register()` **无并发保护**（无 mutex），仅可在 `InitPageVerifiers()` 中由启动线程单次调用，禁止在运行期动态注册。注册采用按 `PageType` 索引的覆盖写入（幂等），重复注册同一 `PageType` 不会出错但会覆盖先前的函数指针。若未来需支持动态注册，需增加 mutex 保护。
+- **发现来源**: Batch 2, 修复 2.1（已合入本文档）
+
+### DC-006: 内联校验入口对 nullptr page 静默返回成功
+
+- **影响范围**: FR-003、Buffer 集成
+- **原始描述**: spec 未定义 page 指针为 nullptr 时的校验行为。
+- **修正后约束**: `VerifyPageInlineWithReport()`（Buffer 热路径内联入口）在 `page == nullptr` 时返回 `DSTORE_SUCC`（静默跳过），而非返回 FAIL 或 PANIC。理由：内联路径处于 Buffer flush/read 中，调用方已保证 page 非空，nullptr 仅在极端异常下出现，此时 PANIC 由上层保证。注意：`VerifyPage()`（通用入口）对 nullptr 的行为可能不同，调用方需区分两个入口的语义。
+- **发现来源**: Batch 2, 修复 2.4（已合入本文档）
+
+### DC-007: 校验模块位掩码全零时的 Fallback 行为
+
+- **影响范围**: FR-008、Configuration 设计
+- **原始描述**: FR-008 定义模块配置为 HEAP / INDEX / ALL，但未定义所有模块均未启用（位掩码为 0）时的行为。
+- **修正后约束**: `GetDfxVerifyModule()` 在 `g_dfxVerifyModules == 0`（所有模块均未启用）时，返回 `VerifyModule::HEAP` 作为 Fallback 默认值，保持向后兼容。此状态不应出现在正常配置中，调用方不应依赖此行为。
+- **发现来源**: Batch 2, 修复 2.3（已合入本文档）
+
+### DC-008: MEDIUM 校验级别尚未纳入设计
+
+- **影响范围**: FR-007、Configuration 设计
+- **原始描述**: FR-007 定义了 OFF / LIGHTWEIGHT / HEAVYWEIGHT 三级。实现中引入了三级执行函数（light / medium / heavy），但 MEDIUM 级别的校验内容（O(n) 页内遍历）在当前 spec 中无对应需求定义。
+- **修正后约束**: 当前实现的校验架构支持 LIGHT / MEDIUM / HEAVY 三级注册（每个 PageType 可注册三个校验函数），但 **MEDIUM 级别的具体校验逻辑尚未实现，需单独排期设计**。MEDIUM 定位为 O(n) 复杂度的页内遍历校验，介于 O(1) 的 LIGHT 和深度穷举的 HEAVY 之间。相关依赖包括 `VerifyContext` 结构体设计。
+- **发现来源**: 附录 B（已合入本文档）

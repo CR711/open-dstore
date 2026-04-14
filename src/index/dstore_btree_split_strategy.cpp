@@ -288,9 +288,10 @@ double BtreeSplitStrategy::GetFillFactor(bool *useFillFactor) const
         *useFillFactor = true;
         return GetBtreeSmgr()->GetFillFactor() / static_cast<double>(PERCENTAGE_DIVIDER);
     } else {
-        /* Other leaf page 50:50 split. */
-        *useFillFactor = false;
-        return 0;
+        /* Non-rightmost leaf page: use fill factor to leave headroom for subsequent inserts
+         * and dead tuple buffering, reducing unnecessary splits under update-heavy workloads. */
+        *useFillFactor = true;
+        return BTREE_NONLEAF_FILLFACTOR / static_cast<double>(PERCENTAGE_DIVIDER);
     }
 }
 

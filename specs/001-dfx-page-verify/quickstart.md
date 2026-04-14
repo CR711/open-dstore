@@ -62,7 +62,7 @@ RetStatus FlushDirtyPage(BufferDesc* buf)
     Page* page = GetPageFromBuffer(buf);
 
     // 刷脏前校验（根据 GUC 自动决定是否执行和级别）
-    RetStatus verifyRet = VerifyPageInline(page);
+    RetStatus verifyRet = VerifyPageOnWrite(page);  /* v3.0: replaces VerifyPageInline() */
     if (verifyRet != DSTORE_SUCC) {
         ErrLog(DSTORE_ERROR, MODULE_DFX,
                ErrMsg("Page verify failed before flush, pageId=(%u,%u)"),
@@ -113,14 +113,14 @@ dstore_verify --all --format json /data/dstore
 
 ```sql
 -- 开启轻量级校验（写入路径生效）
-SET dfx_verify_level = 'LIGHTWEIGHT';
+SET dfx_verify_level = 'LIGHT';  -- [v1: LIGHTWEIGHT, deprecated]
 SET dfx_verify_module = 'ALL';
 
 -- 排查问题时提升到重量级
-SET dfx_verify_level = 'HEAVYWEIGHT';
+SET dfx_verify_level = 'HEAVY';  -- [v1: HEAVYWEIGHT, deprecated]
 
 -- 关闭校验（生产环境默认）
-SET dfx_verify_level = 'OFF';
+SET dfx_verify_level = 'NONE';  -- [v1: OFF, deprecated]
 ```
 
 ## 6. US 闭环回归门禁

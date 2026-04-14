@@ -257,7 +257,7 @@ HeapTuple *MakeHeapTuple(int32 key, const ItemPointerData &ctid)
 void AddTuple(BtrPage *page, IndexTuple *tuple, OffsetNumber offset)
 {
     ASSERT_NE(tuple, nullptr);
-    page->SetUpper(static_cast<uint16>(page->GetUpper() - tuple->GetSize()));
+    page->SetUpper(static_cast<uint16>(page->GetUpper() - MAXALIGN(tuple->GetSize())));
     ItemId *itemId = page->GetItemIdPtr(offset);
     itemId->SetNormal(page->GetUpper(), tuple->GetSize());
     page->SetLower(static_cast<uint16>(page->GetLower() + sizeof(ItemId)));

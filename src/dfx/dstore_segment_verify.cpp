@@ -126,7 +126,7 @@ RetStatus SegmentVerifier::Verify()
     BufferDesc *bufferDesc = INVALID_BUFFER_DESC;
     SegmentMetaPage *segmentMetaPage = m_pageSource->ReadSegmentMetaPage(m_segmentMetaPageId, &bufferDesc);
     if (segmentMetaPage == nullptr) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, m_segmentMetaPageId, "segment_meta_read_failed", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, m_segmentMetaPageId, "segment_meta_read_failed", 1, 0,
             "Failed to read segment meta page (%hu,%u)", m_segmentMetaPageId.m_fileId, m_segmentMetaPageId.m_blockId);
         return DSTORE_FAIL;
     }
@@ -155,7 +155,7 @@ RetStatus SegmentVerifier::WalkExtentChain(
         return DSTORE_FAIL;
     }
 
-    if (VerifyPage(segmentMetaPage, VerifyLevel::HEAVYWEIGHT, m_context->GetReport()) != DSTORE_SUCC) {
+    if (VerifyPage(segmentMetaPage, VerifyLevel::HEAVY, m_context->GetReport()) != DSTORE_SUCC) {
         return DSTORE_FAIL;
     }
 
@@ -166,7 +166,7 @@ RetStatus SegmentVerifier::WalkExtentChain(
         const uint16 expectedFirstSize = ResolveExpectedExtentSize(
             segmentMetaPage->segmentHeader.segmentType, 0, segmentMetaPage->GetSelfExtentSize());
         if (segmentMetaPage->GetSelfExtentSize() != expectedFirstSize) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "extent_size_invalid",
+            ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "extent_size_invalid",
                 expectedFirstSize, segmentMetaPage->GetSelfExtentSize(),
                 "First extent (%hu,%u) has size %hu but expected %hu", segmentMetaPage->GetFileId(),
                 segmentMetaPage->GetBlockNum(), segmentMetaPage->GetSelfExtentSize(), expectedFirstSize);
@@ -178,7 +178,7 @@ RetStatus SegmentVerifier::WalkExtentChain(
     uint64 extentIndex = 1;
     while (currentExtentId.IsValid()) {
         if (!m_context->VisitPage(currentExtentId)) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, currentExtentId, "extent_chain_cycle", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, currentExtentId, "extent_chain_cycle", 1, 0,
                 "Detected extent chain cycle at (%hu,%u)", currentExtentId.m_fileId, currentExtentId.m_blockId);
             return DSTORE_FAIL;
         }
@@ -186,18 +186,18 @@ RetStatus SegmentVerifier::WalkExtentChain(
         BufferDesc *extentBuffer = INVALID_BUFFER_DESC;
         SegExtentMetaPage *extentPage = m_pageSource->ReadExtentMetaPage(currentExtentId, &extentBuffer);
         if (extentPage == nullptr) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, currentExtentId, "extent_chain_broken", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, currentExtentId, "extent_chain_broken", 1, 0,
                 "Failed to read extent meta page (%hu,%u)", currentExtentId.m_fileId, currentExtentId.m_blockId);
             return DSTORE_FAIL;
         }
 
-        if (VerifyPage(extentPage, VerifyLevel::HEAVYWEIGHT, m_context->GetReport()) != DSTORE_SUCC) {
+        if (VerifyPage(extentPage, VerifyLevel::HEAVY, m_context->GetReport()) != DSTORE_SUCC) {
             m_pageSource->ReleasePage(extentBuffer);
             return DSTORE_FAIL;
         }
 
         if (extentPage->extentMeta.magic != EXTENT_META_MAGIC) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, currentExtentId, "extent_magic_invalid", EXTENT_META_MAGIC,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, currentExtentId, "extent_magic_invalid", EXTENT_META_MAGIC,
                 extentPage->extentMeta.magic, "Extent (%hu,%u) magic is invalid", currentExtentId.m_fileId,
                 currentExtentId.m_blockId);
             m_pageSource->ReleasePage(extentBuffer);
@@ -208,7 +208,7 @@ RetStatus SegmentVerifier::WalkExtentChain(
         const uint16 expectedSize =
             ResolveExpectedExtentSize(segmentMetaPage->segmentHeader.segmentType, extentIndex, actualSize);
         if (actualSize != expectedSize) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, currentExtentId, "extent_size_invalid", expectedSize, actualSize,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, currentExtentId, "extent_size_invalid", expectedSize, actualSize,
                 "Extent (%hu,%u) has size %hu but expected %hu for extent index %lu", currentExtentId.m_fileId,
                 currentExtentId.m_blockId, actualSize, expectedSize, extentIndex);
             m_pageSource->ReleasePage(extentBuffer);
@@ -229,21 +229,21 @@ RetStatus SegmentVerifier::VerifySegmentMetadata(
     SegmentMetaPage *segmentMetaPage, const std::vector<ExtentInfo> &extents, uint64 walkedTotalBlocks)
 {
     if (segmentMetaPage->extentMeta.magic != SEGMENT_META_MAGIC) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "segment_magic_invalid",
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "segment_magic_invalid",
             SEGMENT_META_MAGIC, segmentMetaPage->extentMeta.magic, "Segment meta page magic is invalid");
         return DSTORE_FAIL;
     }
 
     const SegmentType segmentType = segmentMetaPage->segmentHeader.segmentType;
     if (!IsDataSegmentType(segmentType) && segmentType != SegmentType::UNDO_SEGMENT_TYPE) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "segment_type_invalid", 1,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "segment_type_invalid", 1,
             static_cast<uint64>(segmentType), "Segment (%hu,%u) has unsupported type %u", segmentMetaPage->GetFileId(),
             segmentMetaPage->GetBlockNum(), static_cast<uint8>(segmentType));
         return DSTORE_FAIL;
     }
 
     if (m_options.checkPageCounts && segmentMetaPage->GetTotalBlockCount() != walkedTotalBlocks) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "block_count_mismatch",
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "block_count_mismatch",
             segmentMetaPage->GetTotalBlockCount(), walkedTotalBlocks,
             "Segment (%hu,%u) totalBlockCount %lu mismatches walked extent blocks %lu", segmentMetaPage->GetFileId(),
             segmentMetaPage->GetBlockNum(), segmentMetaPage->GetTotalBlockCount(), walkedTotalBlocks);
@@ -251,7 +251,7 @@ RetStatus SegmentVerifier::VerifySegmentMetadata(
     }
 
     if (segmentMetaPage->GetExtentCount() != extents.size()) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "extent_count_mismatch",
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "extent_count_mismatch",
             segmentMetaPage->GetExtentCount(), extents.size(),
             "Segment (%hu,%u) extent count %lu mismatches walked extent count %lu", segmentMetaPage->GetFileId(),
             segmentMetaPage->GetBlockNum(), segmentMetaPage->GetExtentCount(), extents.size());
@@ -262,7 +262,7 @@ RetStatus SegmentVerifier::VerifySegmentMetadata(
         auto *dataMetaPage = static_cast<DataSegmentMetaPage *>(static_cast<void *>(segmentMetaPage));
         const bool rangeUnset = dataMetaPage->dataFirst.IsInvalid() || dataMetaPage->dataLast.IsInvalid();
         if ((dataMetaPage->GetDataBlockCount() == 0) != rangeUnset) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "data_range_mismatch",
+            ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "data_range_mismatch",
                 dataMetaPage->GetDataBlockCount() == 0, rangeUnset,
                 "Segment (%hu,%u) dataBlockCount/dataFirst/dataLast are inconsistent", segmentMetaPage->GetFileId(),
                 segmentMetaPage->GetBlockNum());
@@ -272,7 +272,7 @@ RetStatus SegmentVerifier::VerifySegmentMetadata(
         if (!rangeUnset &&
             (!IsPageInExtents(dataMetaPage->dataFirst, extents) || !IsPageInExtents(dataMetaPage->dataLast, extents) ||
                 PageIdToUint64(dataMetaPage->dataFirst) > PageIdToUint64(dataMetaPage->dataLast))) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "data_range_mismatch", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "data_range_mismatch", 1, 0,
                 "Segment (%hu,%u) dataFirst/dataLast fall outside extent ranges", segmentMetaPage->GetFileId(),
                 segmentMetaPage->GetBlockNum());
             return DSTORE_FAIL;
@@ -293,7 +293,7 @@ RetStatus SegmentVerifier::VerifyExtentBitmapConsistency(const std::vector<Exten
         BufferDesc *bitmapMetaBuffer = INVALID_BUFFER_DESC;
         TbsBitmapMetaPage *bitmapMetaPage = m_pageSource->ReadBitmapMetaPage(extent.pageId.m_fileId, &bitmapMetaBuffer);
         if (bitmapMetaPage == nullptr) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, extent.pageId, "bitmap_meta_read_failed", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, extent.pageId, "bitmap_meta_read_failed", 1, 0,
                 "Failed to read bitmap meta page for file %hu", extent.pageId.m_fileId);
             return DSTORE_FAIL;
         }
@@ -301,7 +301,7 @@ RetStatus SegmentVerifier::VerifyExtentBitmapConsistency(const std::vector<Exten
         PageId bitmapPageId = INVALID_PAGE_ID;
         uint16 bitNo = 0;
         if (!LocateBitmapBit(bitmapMetaPage, extent.pageId, &bitmapPageId, &bitNo)) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, extent.pageId, "extent_not_in_bitmap", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, extent.pageId, "extent_not_in_bitmap", 1, 0,
                 "Extent (%hu,%u) cannot be located in tablespace bitmap", extent.pageId.m_fileId,
                 extent.pageId.m_blockId);
             m_pageSource->ReleasePage(bitmapMetaBuffer);
@@ -311,14 +311,14 @@ RetStatus SegmentVerifier::VerifyExtentBitmapConsistency(const std::vector<Exten
         BufferDesc *bitmapBuffer = INVALID_BUFFER_DESC;
         TbsBitmapPage *bitmapPage = m_pageSource->ReadBitmapPage(bitmapPageId, &bitmapBuffer);
         if (bitmapPage == nullptr) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, extent.pageId, "bitmap_page_read_failed", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, extent.pageId, "bitmap_page_read_failed", 1, 0,
                 "Failed to read bitmap page (%hu,%u)", bitmapPageId.m_fileId, bitmapPageId.m_blockId);
             m_pageSource->ReleasePage(bitmapMetaBuffer);
             return DSTORE_FAIL;
         }
 
         if (bitmapPage->TestBitZero(bitNo)) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, extent.pageId, "extent_not_in_bitmap", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, extent.pageId, "extent_not_in_bitmap", 1, 0,
                 "Extent (%hu,%u) is not marked allocated in bitmap page (%hu,%u) bit %hu", extent.pageId.m_fileId,
                 extent.pageId.m_blockId, bitmapPageId.m_fileId, bitmapPageId.m_blockId, bitNo);
             m_pageSource->ReleasePage(bitmapBuffer);
@@ -330,7 +330,7 @@ RetStatus SegmentVerifier::VerifyExtentBitmapConsistency(const std::vector<Exten
         if (validatedBitmapPages.insert(bitmapKey).second) {
             const uint16 popCount = CountSetBits(bitmapPage);
             if (popCount != bitmapPage->allocatedExtentCount) {
-                ReportResult(VerifySeverity::ERROR_LEVEL, bitmapPageId, "bitmap_count_mismatch",
+                ReportResult(VerifySeverity::SEVERITY_ERROR, bitmapPageId, "bitmap_count_mismatch",
                     bitmapPage->allocatedExtentCount, popCount,
                     "Bitmap page (%hu,%u) allocatedExtentCount %hu mismatches popcount %hu",
                     bitmapPageId.m_fileId, bitmapPageId.m_blockId, bitmapPage->allocatedExtentCount, popCount);
@@ -347,7 +347,7 @@ RetStatus SegmentVerifier::VerifyExtentBitmapConsistency(const std::vector<Exten
     std::sort(ranges.begin(), ranges.end());
     for (size_t i = 1; i < ranges.size(); ++i) {
         if (ranges[i - 1].second >= ranges[i].first) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, m_segmentMetaPageId, "extent_overlap", ranges[i - 1].second,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, m_segmentMetaPageId, "extent_overlap", ranges[i - 1].second,
                 ranges[i].first, "Segment (%hu,%u) has overlapping extent ranges [%lu,%lu] and [%lu,%lu]",
                 m_segmentMetaPageId.m_fileId, m_segmentMetaPageId.m_blockId, ranges[i - 1].first, ranges[i - 1].second,
                 ranges[i].first, ranges[i].second);
@@ -368,7 +368,7 @@ RetStatus SegmentVerifier::VerifyIndexLeafPageCount(
     PageId rootPageId = INVALID_PAGE_ID;
     uint32 rootLevel = 0;
     if (!m_pageSource->GetIndexRootInfo(segmentMetaPage->GetSelfPageId(), &rootPageId, &rootLevel)) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, segmentMetaPage->GetSelfPageId(), "btree_root_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, segmentMetaPage->GetSelfPageId(), "btree_root_missing", 1, 0,
             "Failed to resolve btree root for index segment (%hu,%u)", segmentMetaPage->GetFileId(),
             segmentMetaPage->GetBlockNum());
         return DSTORE_FAIL;
@@ -381,7 +381,7 @@ RetStatus SegmentVerifier::VerifyIndexLeafPageCount(
 
     const uint64 expectedLeafCount = CountPhysicalLeafPages(segmentMetaPage->GetSelfPageId(), extents);
     if (actualLeafCount != expectedLeafCount) {
-        ReportResult(VerifySeverity::WARNING_LEVEL, segmentMetaPage->GetSelfPageId(), "leaf_page_count_mismatch",
+        ReportResult(VerifySeverity::SEVERITY_WARNING, segmentMetaPage->GetSelfPageId(), "leaf_page_count_mismatch",
             expectedLeafCount, actualLeafCount,
             "Index segment (%hu,%u) physical leaf page count %lu mismatches traversed level-0 leaf count %lu",
             segmentMetaPage->GetFileId(), segmentMetaPage->GetBlockNum(), expectedLeafCount, actualLeafCount);
@@ -496,7 +496,7 @@ RetStatus SegmentVerifier::CountLeafPagesBySiblingTraversal(const PageId &rootPa
 
     PageId currentPageId = rootLevel == 0 ? rootPageId : DescendToLeafLevel(rootPageId, rootLevel);
     if (!currentPageId.IsValid()) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, rootPageId, "leaf_level_resolution_failed", rootLevel, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, rootPageId, "leaf_level_resolution_failed", rootLevel, 0,
             "Failed to descend from root (%hu,%u) to btree leaf level", rootPageId.m_fileId, rootPageId.m_blockId);
         return DSTORE_FAIL;
     }
@@ -505,7 +505,7 @@ RetStatus SegmentVerifier::CountLeafPagesBySiblingTraversal(const PageId &rootPa
     *leafCount = 0;
     while (currentPageId.IsValid()) {
         if (!visitedPages.insert(PageIdToUint64(currentPageId)).second) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, currentPageId, "btree_sibling_cycle", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, currentPageId, "btree_sibling_cycle", 1, 0,
                 "Detected sibling cycle while counting index leaf pages at (%hu,%u)", currentPageId.m_fileId,
                 currentPageId.m_blockId);
             return DSTORE_FAIL;
@@ -514,14 +514,14 @@ RetStatus SegmentVerifier::CountLeafPagesBySiblingTraversal(const PageId &rootPa
         BufferDesc *bufferDesc = INVALID_BUFFER_DESC;
         BtrPage *page = static_cast<BtrPage *>(m_pageSource->ReadPage(currentPageId, &bufferDesc));
         if (page == nullptr || page->GetType() != PageType::INDEX_PAGE_TYPE) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, currentPageId, "btree_page_read_failed", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, currentPageId, "btree_page_read_failed", 1, 0,
                 "Failed to read btree leaf page (%hu,%u)", currentPageId.m_fileId, currentPageId.m_blockId);
             m_pageSource->ReleasePage(bufferDesc);
             return DSTORE_FAIL;
         }
 
         if (!page->GetLinkAndStatus()->TestType(BtrPageType::LEAF_PAGE) || page->GetLinkAndStatus()->GetLevel() != 0) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, currentPageId, "leaf_page_level_invalid", 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, currentPageId, "leaf_page_level_invalid", 0,
                 page->GetLinkAndStatus()->GetLevel(),
                 "Expected leaf page at (%hu,%u) but found type %u level %u", currentPageId.m_fileId,
                 currentPageId.m_blockId, page->GetLinkAndStatus()->GetType(), page->GetLinkAndStatus()->GetLevel());

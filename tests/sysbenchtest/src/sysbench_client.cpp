@@ -39,6 +39,9 @@
 #include "framework/dstore_thread_interface.h"
 #include "securec.h"
 #include "table_handler.h"
+#include "index/dstore_btree.h"
+#include "framework/dstore_instance.h"
+#include "page/dstore_index_page.h"
 #include "transaction/dstore_transaction_interface.h"
 #include "tuple/dstore_memheap_tuple.h"
 #include "tuple/dstore_tuple_interface.h"
@@ -116,6 +119,9 @@ void SysbenchStorage::Init(int32_t nodeId)
     m_nodeId = nodeId;
     LoadConfig(SYSBENCH_CONFIG_PATH);
     m_stats = new SysbenchStats(m_config.threadNum);
+
+    /* Enable B-tree statistics so operCount records splits/recycles */
+    g_traceSwitch |= static_cast<int64_t>(BTREE_STATISTIC_INFO_MIN_TRACE_LEVEL);
 }
 
 void SysbenchStorage::LoadConfig(const std::string &configPath)
@@ -151,6 +157,20 @@ void SysbenchStorage::LoadConfig(const std::string &configPath)
     m_config.secondaryIndex   = (cJSON_GetObjectItem(json, "secondary")->valueint != 0);
     m_config.autoInc          = (cJSON_GetObjectItem(json, "auto_inc")->valueint != 0);
 
+    /* stress mode parameters (optional) */
+    cJSON *stressRowsItem = cJSON_GetObjectItem(json, "stress_rows");
+    if (stressRowsItem != nullptr) {
+        m_config.stressRows = stressRowsItem->valueint;
+    }
+    cJSON *stressDelItem = cJSON_GetObjectItem(json, "stress_delete_pct");
+    if (stressDelItem != nullptr) {
+        m_config.stressDeletePct = stressDelItem->valueint;
+    }
+    cJSON *stressBatchItem = cJSON_GetObjectItem(json, "stress_batch_size");
+    if (stressBatchItem != nullptr) {
+        m_config.stressBatchSize = stressBatchItem->valueint;
+    }
+
     const char *cmd = cJSON_GetObjectItem(json, "command")->valuestring;
     if (strcmp(cmd, "prepare") == 0) {
         m_config.command = CMD_PREPARE;
@@ -158,6 +178,8 @@ void SysbenchStorage::LoadConfig(const std::string &configPath)
         m_config.command = CMD_RUN;
     } else if (strcmp(cmd, "cleanup") == 0) {
         m_config.command = CMD_CLEANUP;
+    } else if (strcmp(cmd, "stress") == 0) {
+        m_config.command = CMD_STRESS;
     } else {
         m_config.command = CMD_ALL;
     }
@@ -213,6 +235,18 @@ static std::string PrimaryIndexName(uint32_t tableIdx)
         TableName(tableIdx).c_str(),
         SBTEST_PRIMARY_INDEX_DESC[0].indexCol,
         SBTEST_PRIMARY_INDEX_DESC[0].indexAttrNum);
+    std::string result(name);
+    DestroyObject((void **)&name);
+    return result;
+}
+
+/* Build index name for the secondary index on k */
+static std::string SecondaryIndexName(uint32_t tableIdx)
+{
+    char *name = TableDataGenerator::GenerateIndexName(
+        TableName(tableIdx).c_str(),
+        SBTEST_SECONDARY_INDEX_DESC[0].indexCol,
+        SBTEST_SECONDARY_INDEX_DESC[0].indexAttrNum);
     std::string result(name);
     DestroyObject((void **)&name);
     return result;
@@ -288,6 +322,34 @@ void SysbenchStorage::CreateIndexes(uint32_t *allocedMaxRelOid)
         } else {
             TransactionInterface::AbortTrx();
             std::cout << "Create index on " << tName << " failed" << std::endl;
+        }
+    }
+    /* Secondary index on k (if enabled) */
+    if (m_config.secondaryIndex) {
+        for (uint32_t i = 0; i < m_config.tableNum; ++i) {
+            std::string tName = TableName(i);
+
+            DstoreTableHandler *secHandler = simulator->GetTableHandler(tName.c_str(), nullptr);
+            TableDataGenerator secGenerator(tName.c_str(), SBTEST_COL_DESC, SBTEST_COL_MAX);
+            TableInfo secTableInfo = secGenerator.GetTableInfo();
+            secTableInfo.indexDesc = SBTEST_SECONDARY_INDEX_DESC;
+
+            TableDataGenerator secIndexGen;
+            secIndexGen.GenerationIndexTableInfo(secTableInfo);
+            TableInfo secIndexInfo = secIndexGen.GetTableInfo();
+
+            TransactionInterface::StartTrxCommand();
+            TransactionInterface::SetSnapShot();
+            int ret = secHandler->CreateIndex(secIndexInfo);
+            delete secHandler;
+            if (ret == 0) {
+                TransactionInterface::CommitTrxCommand();
+                *allocedMaxRelOid = simulator->GetCurOid();
+                std::cout << "Create secondary index on " << tName << " success" << std::endl;
+            } else {
+                TransactionInterface::AbortTrx();
+                std::cout << "Create secondary index on " << tName << " failed" << std::endl;
+            }
         }
     }
     std::cout << "--------------------Finish Create Indexes--------------------" << std::endl
@@ -441,6 +503,17 @@ void SysbenchStorage::RecoverTables()
         } else {
             std::cout << "Recovery index " << iName << " success" << std::endl;
         }
+
+        if (m_config.secondaryIndex) {
+            std::string secName = SecondaryIndexName(i);
+            DstoreTableHandler secHandler(g_instance);
+            ret = secHandler.RecoveryTable(secName.c_str());
+            if (ret == 1) {
+                std::cout << "Recovery sec index " << secName << " failed" << std::endl;
+            } else {
+                std::cout << "Recovery sec index " << secName << " success" << std::endl;
+            }
+        }
     }
     std::cout << "--------------------Recover Tables Done--------------------" << std::endl;
 }
@@ -451,6 +524,7 @@ void SysbenchStorage::RecoverTables()
 void SysbenchStorage::Execute()
 {
     RecoverTables();
+    PrintIndexBloatStats("After Prepare (before workload)");
     auto runPhase = [&](uint32_t durationSec, bool measuring) {
         std::atomic<bool> stopFlag{false};
         std::vector<std::thread> workers;
@@ -520,6 +594,215 @@ void SysbenchStorage::Execute()
 }
 
 /* ----------------------------------------------------------------
+ * StressInsert - monotonic insert stress test for index bloat
+ *
+ * Phase A (optional): SEQUENTIALLY delete the first stressDeletePct%
+ *          of existing rows (IDs 1..N). Sequential deletion ensures
+ *          entire leaf pages become empty, triggering page recycle.
+ *          (Random deletion leaves ~20% live tuples per page, which
+ *          prevents any page from reaching the fully-empty state
+ *          required for recycle.)
+ * Phase B: insert stressRows new rows with IDs starting from
+ *          tableSize+1, monotonically increasing. This forces page
+ *          splits at the rightmost B-tree leaf.
+ * ---------------------------------------------------------------- */
+void SysbenchStorage::StressInsert()
+{
+    RecoverTables();
+    PrintIndexBloatStats("Before Stress");
+
+    uint32_t deleteTarget = static_cast<uint32_t>(
+        static_cast<uint64_t>(m_config.tableSize) * m_config.stressDeletePct / 100);
+    uint32_t stressRows = m_config.stressRows;
+    uint32_t batchSize = m_config.stressBatchSize;
+
+    /* Phase A: sequential deletes (IDs 1..deleteTarget) to empty whole pages */
+    if (deleteTarget > 0) {
+        std::cout << "-------- Stress Phase A: Sequential Delete IDs 1.."
+                  << deleteTarget << " (" << m_config.stressDeletePct
+                  << "%) --------" << std::endl;
+        auto tStart = std::chrono::system_clock::now();
+
+        /* Sequential IDs: delete from the beginning of key space */
+        std::vector<int32_t> deleteIds;
+        deleteIds.reserve(deleteTarget);
+        for (uint32_t i = 1; i <= deleteTarget; ++i) {
+            deleteIds.push_back(static_cast<int32_t>(i));
+        }
+
+        for (uint32_t tIdx = 0; tIdx < m_config.tableNum; ++tIdx) {
+            std::string tName = TableName(tIdx);
+            std::string iName = PrimaryIndexName(tIdx);
+            DstoreTableHandler *handler = simulator->GetTableHandler(
+                tName.c_str(), iName.c_str());
+            if (handler == nullptr) {
+                std::cout << "  Cannot get handler for " << tName << std::endl;
+                continue;
+            }
+
+            uint32_t deleted = 0;
+            uint32_t batchCount = 0;
+            TransactionInterface::StartTrxCommand();
+            TransactionInterface::SetSnapShot();
+
+            for (uint32_t d = 0; d < deleteTarget; ++d) {
+                uint32_t colSeq[1] = {SBTEST_COL_ID};
+                Datum indexValues[1] = {Int32GetDatum(deleteIds[d])};
+                int ret = handler->Delete(colSeq, indexValues, 1);
+                if (ret == 0) { ++deleted; }
+
+                if (++batchCount >= batchSize) {
+                    TransactionInterface::CommitTrxCommand();
+                    ThreadContextInterface::GetCurrentThreadContext()->ResetQueryMemory();
+                    TransactionInterface::StartTrxCommand();
+                    TransactionInterface::SetSnapShot();
+                    batchCount = 0;
+                }
+            }
+            TransactionInterface::CommitTrxCommand();
+            ThreadContextInterface::GetCurrentThreadContext()->ResetQueryMemory();
+            delete handler;
+
+            std::cout << "  " << tName << ": deleted " << deleted
+                      << "/" << deleteTarget << " rows" << std::endl;
+        }
+
+        auto tEnd = std::chrono::system_clock::now();
+        double elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            tEnd - tStart).count() / 1e6;
+        std::cout << "  Phase A finished in " << elapsed << "s" << std::endl;
+        PrintIndexBloatStats("After Delete Phase (immediate)");
+
+        /* Wait for background recycle worker to process the recycle queue */
+        std::cout << "  Waiting 5s for background recycle worker..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::seconds(5));
+        PrintIndexBloatStats("After Delete Phase (after 5s wait)");
+    }
+
+    /* Phase B: monotonic inserts beyond tableSize */
+    std::cout << "-------- Stress Phase B: Insert " << stressRows
+              << " rows (ID " << m_config.tableSize + 1 << " -> "
+              << m_config.tableSize + stressRows << ") --------" << std::endl;
+    auto tStart = std::chrono::system_clock::now();
+
+    uint32_t threadNum = std::min(m_config.threadNum, stressRows);
+    if (threadNum == 0) threadNum = 1;
+    uint32_t rowsPerThread = stressRows / threadNum;
+    uint32_t remainder = stressRows % threadNum;
+
+    for (uint32_t tIdx = 0; tIdx < m_config.tableNum; ++tIdx) {
+        std::vector<std::thread> workers;
+        uint32_t nextRow = m_config.tableSize + 1;
+
+        for (uint32_t tid = 0; tid < threadNum; ++tid) {
+            uint32_t rows = rowsPerThread + (tid < remainder ? 1 : 0);
+            uint32_t rowStart = nextRow;
+            uint32_t rowEnd = nextRow + rows - 1;
+            nextRow = rowEnd + 1;
+
+            workers.emplace_back([this, tIdx, rowStart, rowEnd, batchSize] {
+                CreateThreadAndRegister();
+                StorageSession *sc = CreateStorageSession(1ULL);
+                ThreadContextInterface *ctx =
+                    ThreadContextInterface::GetCurrentThreadContext();
+                ctx->AttachSessionToThread(sc);
+
+                std::string tName = TableName(tIdx);
+                std::string iName = PrimaryIndexName(tIdx);
+                DstoreTableHandler *handler = simulator->GetTableHandler(
+                    tName.c_str(), iName.c_str());
+
+                char cBuf[SBTEST_C_LEN + 1];
+                char padBuf[SBTEST_PAD_LEN + 1];
+                uint32_t batchCount = 0;
+
+                TransactionInterface::StartTrxCommand();
+                TransactionInterface::SetSnapShot();
+
+                for (uint32_t id = rowStart; id <= rowEnd; ++id) {
+                    Datum values[SBTEST_COL_MAX];
+                    bool isNulls[SBTEST_COL_MAX] = {false};
+                    int32_t k = static_cast<int32_t>(
+                        rand_r(&gSysbenchSeed) % (rowEnd - rowStart + 1));
+
+                    /* Build c: 11 groups of 3 digits joined by '-' */
+                    int pos = 0;
+                    for (int g = 0; g < 11; ++g) {
+                        if (g > 0) { cBuf[pos++] = '-'; }
+                        int v = rand_r(&gSysbenchSeed) % 1000;
+                        pos += sprintf_s(cBuf + pos, sizeof(cBuf) - pos,
+                                         "%03d", v);
+                    }
+                    cBuf[pos] = '\0';
+
+                    pos = 0;
+                    for (int g = 0; g < 5; ++g) {
+                        if (g > 0) { padBuf[pos++] = '-'; }
+                        int v = rand_r(&gSysbenchSeed) % 100;
+                        pos += sprintf_s(padBuf + pos, sizeof(padBuf) - pos,
+                                         "%02d", v);
+                    }
+                    padBuf[pos] = '\0';
+
+                    uint64_t cLen = strlen(cBuf);
+                    text *cText = (text *)malloc(VARHDRSZ + cLen + 1);
+                    DstoreSetVarSize(cText, VARHDRSZ + cLen + 1);
+                    (void)memcpy_s(cText->vl_dat, cLen + 1, cBuf, cLen + 1);
+
+                    uint64_t padLen = strlen(padBuf);
+                    text *padText = (text *)malloc(VARHDRSZ + padLen + 1);
+                    DstoreSetVarSize(padText, VARHDRSZ + padLen + 1);
+                    (void)memcpy_s(padText->vl_dat, padLen + 1, padBuf,
+                                   padLen + 1);
+
+                    values[SBTEST_COL_ID]  = Int32GetDatum(static_cast<int32_t>(id));
+                    values[SBTEST_COL_K]   = Int32GetDatum(k);
+                    values[SBTEST_COL_C]   = PointerGetDatum(cText);
+                    values[SBTEST_COL_PAD] = PointerGetDatum(padText);
+
+                    uint32_t pkCols[1] = {SBTEST_COL_ID};
+                    int ret = handler->Insert(values, isNulls, pkCols);
+                    free(cText);
+                    free(padText);
+                    if (ret != 0) {
+                        std::cout << "Stress insert id=" << id << " failed"
+                                  << std::endl;
+                    }
+
+                    if (++batchCount >= batchSize) {
+                        TransactionInterface::CommitTrxCommand();
+                        ThreadContextInterface::GetCurrentThreadContext()
+                            ->ResetQueryMemory();
+                        TransactionInterface::StartTrxCommand();
+                        TransactionInterface::SetSnapShot();
+                        batchCount = 0;
+                    }
+                }
+
+                TransactionInterface::CommitTrxCommand();
+                ThreadContextInterface::GetCurrentThreadContext()
+                    ->ResetQueryMemory();
+                delete handler;
+                ctx->DetachSessionFromThread();
+                UnregisterThread();
+                CleanUpSession(sc);
+            });
+        }
+        for (auto &w : workers) { w.join(); }
+        std::cout << "Stress inserted " << stressRows << " rows into "
+                  << TableName(tIdx) << " (ID range "
+                  << m_config.tableSize + 1 << "-"
+                  << m_config.tableSize + stressRows << ")" << std::endl;
+    }
+
+    auto tEnd = std::chrono::system_clock::now();
+    double elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        tEnd - tStart).count() / 1e6;
+    std::cout << "Phase B finished in " << elapsed << "s" << std::endl;
+    PrintIndexBloatStats("After Stress Insert");
+}
+
+/* ----------------------------------------------------------------
  * DropTables
  * ---------------------------------------------------------------- */
 void SysbenchStorage::DropTables()
@@ -532,6 +815,101 @@ void SysbenchStorage::DropTables()
         simulator = nullptr;
     }
     std::cout << "Tables cleared." << std::endl;
+}
+
+/* ----------------------------------------------------------------
+ * PrintIndexBloatStats - print index page count and bloat ratio
+ * ---------------------------------------------------------------- */
+void SysbenchStorage::PrintIndexBloatStats(const char *phase)
+{
+    std::cout << std::endl;
+    std::cout << "==================== Index Bloat Stats [" << phase << "] ====================" << std::endl;
+    std::cout << "Index               | AllocPgs | Level | SplitBuild | SplitInsert | MarkRecyc  | Recycled   " << std::endl;
+    std::cout << "--------------------|----------|-------|------------|-------------|------------|------------" << std::endl;
+
+    uint64_t totalRows = 0;
+    uint64_t totalIdxPages = 0;
+    uint64_t totalSplitBuild = 0, totalSplitInsert = 0;
+    uint64_t totalMarkRecyc = 0, totalRecycled = 0;
+
+    /* Helper: report one index with BtrMeta split/recycle stats */
+    auto reportIndex = [&](const std::string &label, const std::string &tName,
+                           const std::string &idxName, uint32_t rows) {
+        DstoreTableHandler *handler = simulator->GetTableHandler(tName.c_str(), idxName.c_str());
+        if (handler == nullptr || handler->m_indexRel == nullptr ||
+            handler->m_indexRel->btreeSmgr == nullptr) {
+            std::cout << label << " | index not available" << std::endl;
+            if (handler != nullptr) { delete handler; }
+            return;
+        }
+
+        uint64_t idxBlockCount = handler->m_indexRel->btreeSmgr->GetIndexBlockCount();
+
+        /* Read BtrMeta: tree level + split/recycle counts */
+        uint32_t treeLevel = 0;
+        uint64_t splitBuild = 0, splitInsert = 0, markRecyclable = 0, recycled = 0;
+        {
+            PageId btrMetaPageId = handler->m_indexRel->btreeSmgr->GetBtrMetaPageId();
+            BufMgrInterface *bufMgr = g_storageInstance->GetBufferMgr();
+            BufferDesc *metaBuf = bufMgr->Read(g_defaultPdbId, btrMetaPageId, LW_SHARED);
+            if (metaBuf != INVALID_BUFFER_DESC) {
+                BtrPage *metaPage = static_cast<BtrPage *>(metaBuf->GetPage());
+                BtrMeta *btrMeta = static_cast<BtrMeta *>(
+                    static_cast<void *>(metaPage->GetData()));
+                treeLevel = btrMeta->GetRootLevel();
+                /* Sum split/recycle counts across all levels */
+                for (uint32 lv = 0; lv <= treeLevel; ++lv) {
+                    splitBuild += btrMeta->operCount[static_cast<int>(
+                        BtreeOperType::BTR_OPER_SPLIT_WHEN_BUILD)][lv];
+                    splitInsert += btrMeta->operCount[static_cast<int>(
+                        BtreeOperType::BTR_OPER_SPLIT_WHEN_INSERT)][lv];
+                    markRecyclable += btrMeta->operCount[static_cast<int>(
+                        BtreeOperType::BTR_OPER_MARK_RECYCLABLE)][lv];
+                    recycled += btrMeta->operCount[static_cast<int>(
+                        BtreeOperType::BTR_OPER_RECYCLED)][lv];
+                }
+                bufMgr->UnlockAndRelease(metaBuf, BufferPoolUnlockContentFlag::DontCheckCrc());
+            }
+        }
+
+        char line[256];
+        sprintf_s(line, sizeof(line),
+            "%-19s | %-8lu | %-5u | %-10lu | %-11lu | %-10lu | %-10lu",
+            label.c_str(), idxBlockCount, treeLevel,
+            splitBuild, splitInsert, markRecyclable, recycled);
+        std::cout << line << std::endl;
+
+        totalRows += rows;
+        totalIdxPages += idxBlockCount;
+        totalSplitBuild += splitBuild;
+        totalSplitInsert += splitInsert;
+        totalMarkRecyc += markRecyclable;
+        totalRecycled += recycled;
+        delete handler;
+    };
+
+    for (uint32_t i = 0; i < m_config.tableNum; ++i) {
+        std::string tName = TableName(i);
+        reportIndex(tName + " (pk)", tName, PrimaryIndexName(i), m_config.tableSize);
+        if (m_config.secondaryIndex) {
+            reportIndex(tName + " (k)", tName, SecondaryIndexName(i), m_config.tableSize);
+        }
+    }
+
+    std::cout << "--------------------|----------|-------|------------|-------------|------------|------------" << std::endl;
+    char summary[256];
+    sprintf_s(summary, sizeof(summary),
+        "TOTAL               | %-8lu |       | %-10lu | %-11lu | %-10lu | %-10lu",
+        totalIdxPages, totalSplitBuild, totalSplitInsert, totalMarkRecyc, totalRecycled);
+    std::cout << summary << std::endl;
+    uint64_t netGrowth = totalSplitBuild + totalSplitInsert - totalRecycled;
+    std::cout << "  Net page growth (splits - recycled) = " << netGrowth << std::endl;
+    std::cout << "  Recycle efficiency = "
+              << (totalSplitInsert > 0 ?
+                  static_cast<double>(totalRecycled) * 100.0 / static_cast<double>(totalSplitInsert) : 0.0)
+              << "%" << std::endl;
+    std::cout << "===================================================================================" << std::endl;
+    std::cout << std::endl;
 }
 
 /* ================================================================

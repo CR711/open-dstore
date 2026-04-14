@@ -42,6 +42,8 @@
 #include "diagnose/dstore_wal_diagnose.h"
 #include "common/fault_injection/dstore_wal_fault_injection.h"
 #include "fault_injection/fault_injection.h"
+#include "dfx/dstore_page_verify.h"
+#include "buffer/dstore_buf_mgr.h"
 namespace DSTORE {
 
 static constexpr uint32 WAL_WAIT_PLSN_SLEEP = 1;
@@ -1141,6 +1143,54 @@ void WalStream::CheckpointAfterRedo(PdbId pdbId, uint64 term)
         SetInRecovering(false);
         return;
     }
+    /* DFX: Verify all recovery dirty pages before flushing to disk.
+     * Purpose: Detect page corruption caused by redo function bugs or WAL record damage.
+     * Design principles:
+     *   - Use VerifyPageFull (inspection mode): collect issues, never PANIC
+     *   - On failure: log ERROR but do NOT block recovery (recovery is the last resort)
+     *   - LIGHT level O(1) cost per page, negligible impact on recovery time */
+    {
+        BufMgrInterface *verifyBufMgr =
+            (g_storageInstance != nullptr) ? g_storageInstance->GetBufferMgr() : nullptr;
+        long dirtyArraySize = 0;
+        WalDirtyPageEntry *dirtyPages = walRecovery->GetDirtyPageEntryArrayCopy(dirtyArraySize);
+        if (verifyBufMgr != nullptr && dirtyPages != nullptr && dirtyArraySize > 0) {
+            uint64 verifyFailCount = 0;
+            for (long i = 0; i < dirtyArraySize; i++) {
+                BufferDesc *bufDesc = verifyBufMgr->RecoveryRead(pdbId, dirtyPages[i].pageId);
+                if (bufDesc == INVALID_BUFFER_DESC) {
+                    continue;
+                }
+                Page *page = bufDesc->GetPage();
+                if (page != nullptr && IsPageVerifierRegistered(page->GetType())) {
+                    VerifyReport report;
+                    VerifyPageFull(page, VerifyLevel::LIGHT, &report);
+                    if (report.HasError()) {
+                        verifyFailCount++;
+                        /* Store FormatText result to avoid dangling pointer from temporary */
+                        std::string detail = report.FormatText();
+                        ErrLog(DSTORE_ERROR, MODULE_WAL,
+                            ErrMsg("[PDB:%u WAL:%lu]Post-redo verify FAILED: pageId(%hu,%u) errorCount:%lu detail:%s",
+                                pdbId, m_walId, dirtyPages[i].pageId.m_fileId,
+                                dirtyPages[i].pageId.m_blockId,
+                                static_cast<unsigned long>(report.GetErrorCount()),
+                                detail.c_str()));
+                    }
+                }
+                /* Ensure lock release on all paths (bufDesc holds exclusive lock from RecoveryRead) */
+                verifyBufMgr->UnlockAndRelease(bufDesc);
+            }
+            ErrLog(DSTORE_LOG, MODULE_WAL,
+                ErrMsg("[PDB:%u WAL:%lu]Post-redo verify complete: total=%ld failed=%lu",
+                    pdbId, m_walId, dirtyArraySize, static_cast<unsigned long>(verifyFailCount)));
+        }
+        /* Free the copy allocated by GetDirtyPageEntryArrayCopy (from MEMORY_CONTEXT_LONGLIVE) */
+        if (dirtyPages != nullptr) {
+            DstorePfree(dirtyPages);
+            dirtyPages = nullptr;
+        }
+    }
+
     if (STORAGE_FUNC_SUCC(walRecovery->FlushAllDirtyPages())) {
         dirtyPageFlushed = true;
     }

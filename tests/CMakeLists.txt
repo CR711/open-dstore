@@ -4,6 +4,7 @@ endif()
 if (ENABLE_TPCC STREQUAL "ON" OR DSTORE_TEST_TOOL STREQUAL "ON")
     add_subdirectory(tpcctest)
     add_subdirectory(sysbenchtest)
+    add_subdirectory(dstore_stress_verify)
 endif()
 
 add_subdirectory(utilities)
@@ -169,3 +170,23 @@ add_custom_target(run_dstore_sysbenchtest_asan
     COMMENT "run dstore sysbench simulation test with asan"
 )
 #--------add sysbenchtest cmake command end--------
+
+#--------add stress_verify cmake command start--------
+add_custom_target(run_dstore_stress_verify
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests
+     && bash build_and_run_stress_verify.sh -t ${LOCAL_LIB_PATH} -u ${UTILS_HOME} -r true
+    COMMENT "run dstore page verification stress test"
+)
+
+add_custom_target(run_dstore_stress_verify_asan
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests
+     && bash build_and_run_stress_verify.sh -t ${LOCAL_LIB_PATH} -u ${UTILS_HOME} -r true -a ON
+    COMMENT "run dstore page verification stress test with asan"
+)
+
+add_custom_target(run_dstore_crash_recovery_test
+    COMMAND cd ${CMAKE_SOURCE_DIR}/tests
+     && bash build_and_run_stress_verify.sh -t ${LOCAL_LIB_PATH} -u ${UTILS_HOME} -r true -c
+    COMMENT "run dstore crash recovery + DFX verification test"
+)
+#--------add stress_verify cmake command end--------

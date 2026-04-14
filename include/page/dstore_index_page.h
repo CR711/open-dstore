@@ -301,6 +301,12 @@ public:
             static_cast<char *>(static_cast<void *>(this)) + GetSpecialOffset()));
     }
 
+    inline const BtrPageLinkAndStatus *GetLinkAndStatus() const
+    {
+        return reinterpret_cast<const BtrPageLinkAndStatus *>(
+            reinterpret_cast<const char *>(this) + GetSpecialOffset());
+    }
+
     inline PageId GetRight()
     {
         return GetLinkAndStatus()->GetRight();
@@ -329,6 +335,11 @@ public:
     inline IndexTuple *GetIndexTuple(OffsetNumber offset)
     {
         return static_cast<IndexTuple *>(this->DataPage::GetRowData(offset));
+    }
+
+    inline const IndexTuple *GetIndexTuple(OffsetNumber offset) const
+    {
+        return static_cast<const IndexTuple *>(this->DataPage::GetRowData(offset));
     }
 
     inline IndexTuple *GetIndexTuple(ItemId *itemId)

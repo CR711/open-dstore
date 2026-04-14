@@ -12,7 +12,6 @@ class BufMgrInterface;
 
 struct HeapVerifyOptions {
     SnapshotData *snapshot{nullptr};
-    float sampleRatio{1.0F};
     bool isOnline{true};
     bool checkBigTupleChains{true};
     bool checkFsmConsistency{true};

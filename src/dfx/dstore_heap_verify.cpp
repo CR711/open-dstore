@@ -42,7 +42,14 @@ public:
         if (*bufferDesc == INVALID_BUFFER_DESC) {
             return nullptr;
         }
-        return static_cast<HeapPage *>((*bufferDesc)->GetPage());
+        HeapPage *page = static_cast<HeapPage *>((*bufferDesc)->GetPage());
+        if (page == nullptr) {
+            /* GetPage() returned nullptr with a valid buffer — release to prevent leak */
+            m_bufMgr->UnlockAndRelease(*bufferDesc);
+            *bufferDesc = INVALID_BUFFER_DESC;
+            return nullptr;
+        }
+        return page;
     }
 
     void ReleaseHeapPage(BufferDesc *bufferDesc) override
@@ -86,6 +93,7 @@ private:
     DataSegmentScanContext m_scanContext;
 };
 
+constexpr uint32 MAX_BIG_TUPLE_CHAIN_LENGTH = 10000;
 constexpr const char *HEAP_VERIFY_TARGET = "heap_segment";
 
 bool IsTupleStorageItem(const ItemId *itemId)
@@ -110,7 +118,7 @@ RetStatus HeapSegmentVerifier::Verify()
         BufferDesc *bufferDesc = INVALID_BUFFER_DESC;
         HeapPage *page = m_pageSource->ReadHeapPage(pageId, &bufferDesc);
         if (page == nullptr) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "heap_page_read_failed", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "heap_page_read_failed", 1, 0,
                 "Failed to read heap page (%hu,%u)", pageId.m_fileId, pageId.m_blockId);
             return DSTORE_FAIL;
         }
@@ -128,7 +136,7 @@ RetStatus HeapSegmentVerifier::Verify()
 RetStatus HeapSegmentVerifier::VerifyHeapPage(HeapPage *page)
 {
     VerifyReport *report = m_context->GetReport();
-    if (VerifyPage(page, VerifyLevel::HEAVYWEIGHT, report) != DSTORE_SUCC) {
+    if (VerifyPageFull(page, VerifyLevel::HEAVY, report) != DSTORE_SUCC) {
         return DSTORE_FAIL;
     }
 
@@ -161,27 +169,27 @@ RetStatus HeapSegmentVerifier::VerifyTuple(HeapPage *page, OffsetNumber offset)
     const PageId pageId = page->GetSelfPageId();
 
     if (tuple == nullptr) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "tuple_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "tuple_missing", 1, 0,
             "Tuple data missing for offset %hu", offset);
         return DSTORE_FAIL;
     }
 
     if (itemId->GetLen() != tuple->GetTupleSize()) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "tuple_size_mismatch", itemId->GetLen(),
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "tuple_size_mismatch", itemId->GetLen(),
             tuple->GetTupleSize(), "ItemId[%hu] length %hu != tuple size %hu", offset, itemId->GetLen(),
             tuple->GetTupleSize());
         return DSTORE_FAIL;
     }
 
     if (tuple->GetNumColumn() == 0) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "tuple_column_count_invalid", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "tuple_column_count_invalid", 1, 0,
             "Tuple at offset %hu has zero columns", offset);
         return DSTORE_FAIL;
     }
 
     const uint32 valueOffset = ResolveTupleValueOffset(tuple);
     if (valueOffset > tuple->GetTupleSize()) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "tuple_value_offset_invalid", tuple->GetTupleSize(),
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "tuple_value_offset_invalid", tuple->GetTupleSize(),
             valueOffset, "Tuple at offset %hu has values offset %u beyond tuple size %hu", offset, valueOffset,
             tuple->GetTupleSize());
         return DSTORE_FAIL;
@@ -191,7 +199,7 @@ RetStatus HeapSegmentVerifier::VerifyTuple(HeapPage *page, OffsetNumber offset)
     const uintptr_t tupleStart = reinterpret_cast<uintptr_t>(tuple);
     const uintptr_t tupleEnd = tupleStart + itemId->GetLen();
     if (tupleStart < pageStart || tupleEnd > pageStart + BLCKSZ) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "tuple_overflow_page_boundary", BLCKSZ,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "tuple_overflow_page_boundary", BLCKSZ,
             static_cast<uint64>(tupleEnd - pageStart),
             "Tuple at offset %hu exceeds page boundary", offset);
         return DSTORE_FAIL;
@@ -218,7 +226,7 @@ RetStatus HeapSegmentVerifier::VerifyBigTupleChain(HeapPage *page, OffsetNumber 
 
     const uint32 expectedChunks = firstChunk->GetNumChunks();
     if (expectedChunks == 0) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "big_tuple_chunk_count_invalid", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "big_tuple_chunk_count_invalid", 1, 0,
             "Big tuple at offset %hu declares zero chunks", offset);
         return DSTORE_FAIL;
     }
@@ -228,19 +236,20 @@ RetStatus HeapSegmentVerifier::VerifyBigTupleChain(HeapPage *page, OffsetNumber 
 
     ItemPointerData nextChunkCtid = firstChunk->GetNextChunkCtid();
     uint32 actualChunks = 1;
-    while (nextChunkCtid != INVALID_ITEM_POINTER) {
+    while (nextChunkCtid != INVALID_ITEM_POINTER && actualChunks < MAX_BIG_TUPLE_CHAIN_LENGTH) {
         if (!visitedCtids.insert(ItemPointerToUint64(nextChunkCtid)).second) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "big_tuple_chain_cycle", expectedChunks, actualChunks,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "big_tuple_chain_cycle", expectedChunks, actualChunks,
                 "Detected cycle in big tuple chain starting at offset %hu", offset);
             return DSTORE_FAIL;
         }
 
+        /* chunkBuffer is acquired below and MUST be released via ReleaseHeapPage before any return/continue */
         BufferDesc *chunkBuffer = INVALID_BUFFER_DESC;
         HeapPage *chunkPage = nullptr;
         HeapDiskTuple *chunkTuple = nullptr;
         ItemId *chunkItemId = nullptr;
         if (!ReadChunkTuple(nextChunkCtid, &chunkBuffer, &chunkPage, &chunkTuple, &chunkItemId)) {
-            ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "big_tuple_chain_broken", expectedChunks, actualChunks,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "big_tuple_chain_broken", expectedChunks, actualChunks,
                 "Missing tuple chunk (%hu,%u,%hu) for big tuple at offset %hu", nextChunkCtid.GetFileId(),
                 nextChunkCtid.GetBlockNum(), nextChunkCtid.GetOffset(), offset);
             return DSTORE_FAIL;
@@ -249,7 +258,7 @@ RetStatus HeapSegmentVerifier::VerifyBigTupleChain(HeapPage *page, OffsetNumber 
         ++actualChunks;
         if (!chunkTuple->IsLinked() || chunkTuple->IsFirstLinkChunk()) {
             m_pageSource->ReleaseHeapPage(chunkBuffer);
-            ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "big_tuple_chain_order_invalid", expectedChunks,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "big_tuple_chain_order_invalid", expectedChunks,
                 actualChunks, "Tuple chunk (%hu,%u,%hu) is not a continuation chunk", nextChunkCtid.GetFileId(),
                 nextChunkCtid.GetBlockNum(), nextChunkCtid.GetOffset());
             return DSTORE_FAIL;
@@ -257,7 +266,7 @@ RetStatus HeapSegmentVerifier::VerifyBigTupleChain(HeapPage *page, OffsetNumber 
 
         if (chunkItemId->GetLen() != chunkTuple->GetTupleSize()) {
             m_pageSource->ReleaseHeapPage(chunkBuffer);
-            ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "big_tuple_chunk_size_mismatch", chunkItemId->GetLen(),
+            ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "big_tuple_chunk_size_mismatch", chunkItemId->GetLen(),
                 chunkTuple->GetTupleSize(), "Chunk tuple (%hu,%u,%hu) length %hu != tuple size %hu",
                 nextChunkCtid.GetFileId(), nextChunkCtid.GetBlockNum(), nextChunkCtid.GetOffset(), chunkItemId->GetLen(),
                 chunkTuple->GetTupleSize());
@@ -268,8 +277,14 @@ RetStatus HeapSegmentVerifier::VerifyBigTupleChain(HeapPage *page, OffsetNumber 
         m_pageSource->ReleaseHeapPage(chunkBuffer);
     }
 
+    if (actualChunks >= MAX_BIG_TUPLE_CHAIN_LENGTH) {
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "big_tuple_chain_too_long", MAX_BIG_TUPLE_CHAIN_LENGTH,
+            actualChunks, "Big tuple chain at offset %hu exceeded max length %u", offset, MAX_BIG_TUPLE_CHAIN_LENGTH);
+        return DSTORE_FAIL;
+    }
+
     if (actualChunks != expectedChunks) {
-        ReportResult(VerifySeverity::ERROR_LEVEL, pageId, "big_tuple_chunk_count_mismatch", expectedChunks,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "big_tuple_chunk_count_mismatch", expectedChunks,
             actualChunks, "Big tuple at offset %hu expected %u chunks but walked %u", offset, expectedChunks,
             actualChunks);
         return DSTORE_FAIL;
@@ -288,7 +303,7 @@ void HeapSegmentVerifier::VerifyFsmConsistency(HeapPage *page)
     uint16 listId = 0;
     uint32 recordedSpaceUpperBound = 0;
     if (!m_pageSource->GetRecordedFsmSpace(fsmIndex, &listId, &recordedSpaceUpperBound)) {
-        ReportResult(VerifySeverity::WARNING_LEVEL, page->GetSelfPageId(), "fsm_lookup_failed", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_WARNING, page->GetSelfPageId(), "fsm_lookup_failed", 1, 0,
             "Failed to locate FSM entry (%hu,%u,%hu) for page (%hu,%u)", fsmIndex.page.m_fileId,
             fsmIndex.page.m_blockId, fsmIndex.slot, page->GetFileId(), page->GetBlockNum());
         return;
@@ -297,7 +312,7 @@ void HeapSegmentVerifier::VerifyFsmConsistency(HeapPage *page)
     const uint32 actualFreeSpace = page->GetFreeSpace<FreeSpaceCondition::RAW>();
     const uint16 actualListId = PartitionFreeSpaceMap::GetListId(static_cast<uint16>(actualFreeSpace));
     if (actualListId != listId) {
-        ReportResult(VerifySeverity::WARNING_LEVEL, page->GetSelfPageId(), "fsm_space_mismatch",
+        ReportResult(VerifySeverity::SEVERITY_WARNING, page->GetSelfPageId(), "fsm_space_mismatch",
             recordedSpaceUpperBound, actualFreeSpace,
             "FSM entry (%hu,%u,%hu) records list %hu (<= %u bytes), actual page free space is %u bytes",
             fsmIndex.page.m_fileId, fsmIndex.page.m_blockId, fsmIndex.slot, listId, recordedSpaceUpperBound,
@@ -327,13 +342,13 @@ bool HeapSegmentVerifier::ShouldSkipTupleOnline(HeapDiskTuple *tuple, const Item
 
     XidStatus xidStatus(tuple->GetXid(), transaction);
     if (xidStatus.IsAborted()) {
-        ReportResult(VerifySeverity::INFO_LEVEL, ctid.GetPageId(), "tuple_skipped_aborted", 0, tuple->GetXid().m_placeHolder,
+        ReportResult(VerifySeverity::SEVERITY_INFO, ctid.GetPageId(), "tuple_skipped_aborted", 0, tuple->GetXid().m_placeHolder,
             "Skipped aborted tuple at (%hu,%u,%hu) during online heap verification", ctid.GetFileId(),
             ctid.GetBlockNum(), ctid.GetOffset());
         return true;
     }
     if (xidStatus.IsInProgress() || xidStatus.IsPendingCommit()) {
-        ReportResult(VerifySeverity::INFO_LEVEL, ctid.GetPageId(), "tuple_skipped_in_progress", 0,
+        ReportResult(VerifySeverity::SEVERITY_INFO, ctid.GetPageId(), "tuple_skipped_in_progress", 0,
             tuple->GetXid().m_placeHolder, "Skipped in-progress tuple at (%hu,%u,%hu) during online heap verification",
             ctid.GetFileId(), ctid.GetBlockNum(), ctid.GetOffset());
         return true;
@@ -389,7 +404,14 @@ bool HeapSegmentVerifier::ReadChunkTuple(const ItemPointerData &ctid, BufferDesc
     *page = chunkPage;
     *tuple = chunkPage->GetDiskTuple(ctid.GetOffset());
     *itemId = chunkItemId;
-    return *tuple != nullptr;
+    if (*tuple == nullptr) {
+        m_pageSource->ReleaseHeapPage(*bufferDesc);
+        *bufferDesc = INVALID_BUFFER_DESC;
+        *page = nullptr;
+        *itemId = nullptr;
+        return false;
+    }
+    return true;
 }
 
 void HeapSegmentVerifier::ReportResult(VerifySeverity severity, const PageId &pageId, const char *checkName,
@@ -441,7 +463,7 @@ RetStatus VerifyHeapSegment(
         return DSTORE_FAIL;
     }
 
-    VerifyContext context(report, options.snapshot, options.sampleRatio, options.isOnline, options.maxErrors);
+    VerifyContext context(report, options.snapshot, 1.0f, options.isOnline, options.maxErrors);
     RelationHeapVerifyPageSource pageSource(bufMgr, heapRel);
     HeapSegmentVerifier verifier(&pageSource, options, &context);
     return verifier.Verify();

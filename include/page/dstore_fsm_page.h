@@ -305,7 +305,18 @@ public:
         FsmNode *fsmNodePtr = reinterpret_cast<FsmNode *>(slotPtr);
         return fsmNodePtr;
     }
+    const FsmNode* FsmNodePtr(uint16 slotId) const
+    {
+        const char *slotPtr = data + sizeof(FsmNode) * slotId;
+        const FsmNode *fsmNodePtr = reinterpret_cast<const FsmNode *>(slotPtr);
+        return fsmNodePtr;
+    }
     FsmList* FsmListPtr(uint16 listId)
+    {
+        StorageAssert(listId != FSM_FREE_LIST_COUNT);
+        return &(fsmPageHeader.lists[listId]);
+    }
+    const FsmList* FsmListPtr(uint16 listId) const
     {
         StorageAssert(listId != FSM_FREE_LIST_COUNT);
         return &(fsmPageHeader.lists[listId]);
