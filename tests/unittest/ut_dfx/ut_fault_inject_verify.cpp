@@ -203,7 +203,7 @@ TEST_P(UTFaultInjectVerifyP, CorruptionDetectedWithCodeAndSeverity)
     ASSERT_NE(page, nullptr) << c.label;
 
     VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, c.triggerLevel, &report), DSTORE_FAIL) << c.label;
+    EXPECT_EQ(VerifyPage(static_cast<const Page *>(page), c.triggerLevel, &report), DSTORE_FAIL) << c.label;
 
     /* Primary code MUST fire.  altCode only used for cases with legitimate
      * disjunction (currently none in kRepresentativeCases; kept for future
@@ -339,9 +339,11 @@ TEST_F(UTFaultInjectVerify, IndexSpecialOffset_PrimaryCodeMustHit)
      * it erases the verifier's diagnostic specificity. */
     PageBuffer buf{};
     BtrPage *page = MakeValidIndexPage(buf, {108, 1});
-    /* 8-byte misalignment — on the well-aligned special region this
-     * triggers BTR_SPECIAL_OFFSET_INVALID, not the generic boundary. */
-    page->SetSpecialOffset(static_cast<uint16>(page->GetSpecialOffset() - 8));
+    /* Shift special offset by +8 (into page padding) so the index-specific
+     * LIGHT check fires BTR_SPECIAL_OFFSET_INVALID.  We move it FORWARD
+     * (toward BLCKSZ) rather than backward so that upper <= specialOffset
+     * still holds — otherwise the generic boundary check fires first. */
+    page->SetSpecialOffset(static_cast<uint16>(page->GetSpecialOffset() + 8));
     page->SetChecksum();
 
     VerifyReport report;

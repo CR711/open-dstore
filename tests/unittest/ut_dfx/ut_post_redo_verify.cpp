@@ -33,55 +33,11 @@ using DSTORE::ut_dfx::ScopedVerifyConfig;
 using DSTORE::ut_dfx::HasVerifyCode;
 using DSTORE::ut_dfx::EnableAllModules;
 
+using DSTORE::ut_dfx::MakeValidHeapPage;
+using DSTORE::ut_dfx::AddHeapTuple;
+using DSTORE::ut_dfx::MakeValidIndexPage;
+
 namespace {
-
-/* ======================================================================
- * Page Factory Functions
- * ====================================================================== */
-
-/* ---------- Heap ---------- */
-HeapPage *MakeValidHeapPage(PageBuffer &buf, PageId pageId)
-{
-    HeapPage *page = reinterpret_cast<HeapPage *>(buf.data());
-    page->Init(0, PageType::HEAP_PAGE_TYPE, pageId);
-    page->SetLsn(1, 1, 1, false);
-    page->SetDataHeaderSize(HEAP_PAGE_DATA_OFFSET);
-    page->m_header.m_lower = HEAP_PAGE_DATA_OFFSET;
-    page->AllocateTdSpace();
-    page->SetFsmIndex({INVALID_PAGE_ID, 0});
-    page->SetPotentialDelSize(0);
-    page->SetChecksum();
-    return page;
-}
-
-void AddHeapTuple(HeapPage *page, OffsetNumber offset, uint16 tupleSize, uint8 tdId)
-{
-    page->SetUpper(static_cast<uint16>(page->GetUpper() - tupleSize));
-    ItemId *itemId = page->GetItemIdPtr(offset);
-    itemId->SetNormal(page->GetUpper(), tupleSize);
-    page->SetLower(static_cast<uint16>(page->GetLower() + sizeof(ItemId)));
-
-    HeapDiskTuple *tuple = page->GetDiskTuple(offset);
-    tuple->SetTupleSize(tupleSize);
-    tuple->SetTdId(tdId);
-    tuple->SetLockerTdId(INVALID_TD_SLOT);
-    tuple->SetTdStatus(ATTACH_TD_AS_NEW_OWNER);
-    tuple->SetLiveMode(HeapDiskTupLiveMode::TUPLE_BY_NORMAL_INSERT);
-    tuple->SetNumColumn(1);
-}
-
-/* ---------- Index ---------- */
-BtrPage *MakeValidIndexPage(PageBuffer &buf, PageId pageId)
-{
-    BtrPage *page = reinterpret_cast<BtrPage *>(buf.data());
-    page->InitBtrPageInner(pageId);
-    page->SetLsn(1, 1, 1, false);
-    page->GetLinkAndStatus()->InitPageMeta({1, 1}, 0, false);
-    page->SetBtrMetaCreateXid(Xid(0));
-    page->AllocateTdSpace();
-    page->SetChecksum();
-    return page;
-}
 
 /* ---------- Undo ---------- */
 UndoRecordPage *MakeValidUndoRecPage(PageBuffer &buf, PageId pageId)
