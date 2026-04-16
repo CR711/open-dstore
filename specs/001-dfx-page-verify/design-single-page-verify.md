@@ -3,6 +3,15 @@
 | 版本 | 作者 | 日期 | 状态 |
 |------|------|------|------|
 | 1.0 | DStore Team | 2026-03-24 | Draft |
+| 3.0 | DStore Team | 2026-04-09 | 同步实现代码 |
+| 3.1 | DStore Team | 2026-04-14 | 合并 v1 + v3.0 |
+
+**关联文档**：
+- [spec.md](spec.md) — 需求规格（User Story + 验收场景）
+- [contracts/page-verify-api.md](contracts/page-verify-api.md) — API 接口契约（精简版）
+- [data-model.md](data-model.md) — 数据模型定义
+- [design-cross-page-verify.md](design-cross-page-verify.md) — 跨页面校验设计
+- [tasks.md](tasks.md) — 任务分解与进度
 
 ---
 
@@ -28,11 +37,24 @@ DStore 存储引擎采用 8KB 固定大小的页面作为基本存储单元，�
 设计并实现一套**可扩展、可配置的单页面校验框架**，实现以下目标：
 
 1. **全覆盖**：为所有 17 种 PageType 提供专用校验函数
-2. **双级校验**：
-   - **轻量级（Lightweight）**：嵌入写入路径（CRUD + 刷脏），仅校验 header 级信息，性能开销极低
-   - **重量级（Heavyweight）**：按需触发，校验页面完整结构，保证完备性
-3. **可配置**：通过运行时 GUC 参数动态控制校验级别和模块，无需重启
-4. **可扩展**：基于 Registry 模式，新增页面类型只需注册校验函数，不修改框架代码
+2. **四级校验**：
+   - **NONE**：不校验（redo 阶段强制）
+   - **LIGHT**：O(1) 只读，热路径可用
+   - **MEDIUM**：O(n) 页内遍历，巡检用
+   - **HEAVY**：页内深度穷举，离线用
+3. **场景分离**：写入 PANIC、读取 ERROR、巡检收集
+4. **可配置**：通过运行时 GUC 参数动态控制校验级别和模块，无需重启
+5. **可扩展**：基于 Registry 模式，新增页面类型只需注册校验函数，不修改框架代码
+
+**覆盖范围（17 种）**：
+
+| 模块 | 页面类型 |
+|------|----------|
+| Heap | HEAP_PAGE_TYPE、HEAP_SEGMENT_META_PAGE_TYPE |
+| Index | INDEX_PAGE_TYPE、BTR_QUEUE_PAGE_TYPE、BTR_RECYCLE_PARTITION_META_PAGE_TYPE、BTR_RECYCLE_ROOT_META_PAGE_TYPE |
+| Undo | TRANSACTION_SLOT_PAGE、UNDO_PAGE_TYPE、UNDO_SEGMENT_META_PAGE_TYPE |
+| Segment | DATA_SEGMENT_META_PAGE_TYPE、TBS_EXTENT_META_PAGE_TYPE、TBS_BITMAP_PAGE_TYPE、TBS_BITMAP_META_PAGE_TYPE、TBS_FILE_META_PAGE_TYPE、TBS_SPACE_META_PAGE_TYPE |
+| FSM | FSM_PAGE_TYPE、FSM_META_PAGE_TYPE |
 
 ### 1.3 参考
 
@@ -97,6 +119,15 @@ DStore 存储引擎采用 8KB 固定大小的页面作为基本存储单元，�
 | **不中断语义** | 校验函数仅报告问题 + 返回错误码，不主动中断操作；由调用方决策 |
 | **生产可用** | 不依赖 `DSTORE_USE_ASSERT_CHECKING` 宏，生产环境可通过 GUC 动态启用 |
 
+### 2.3 四级校验模型
+
+| 级别 | 热路径 | 巡检 | redo | undo |
+|------|--------|------|------|------|
+| NONE | - | - | 强制 | - |
+| LIGHT | ✅ | ✅ | - | 最高 |
+| MEDIUM | ❌ | ✅ | - | - |
+| HEAVY | ❌ | ✅ | - | - |
+
 ---
 
 ## 3. 详细设计
@@ -125,7 +156,8 @@ enum class VerifyModule : uint8_t {
 enum class VerifySeverity : uint8_t {
     INFO    = 0,    // 信息性（跳过 in-progress tuple 等）
     WARNING = 1,    // 可疑但可能是瞬态（mid-split 等）
-    ERROR   = 2     // 确定性损坏
+    ERROR   = 2,    // 确定性损坏
+    FATAL   = 3     // 页面不可用
 };
 
 }  // namespace DSTORE
@@ -141,7 +173,60 @@ enum class VerifySeverity : uint8_t {
 
 > 通用类型在 HEAP 或 INDEX 模式下均会被校验；仅当 module=HEAP 时跳过 INDEX 专属类型，反之亦然。
 
-#### 3.1.2 校验结果
+#### 3.1.2 错误码
+
+```cpp
+enum class VerifyCode : uint32_t {
+    OK = 0,
+
+    // 通用 (0x0001-0x000F)
+    PAGE_TYPE_INVALID           = 0x0001,
+    PAGE_ID_INVALID             = 0x0002,
+    PAGE_ID_MISMATCH            = 0x0003,
+    PAGE_CRC_MISMATCH           = 0x0004,
+    PAGE_BOUNDARY_INVALID       = 0x0005,
+    PAGE_MAGIC_MISMATCH         = 0x0006,
+    PAGE_NULL                   = 0x000A,
+
+    // Heap (0x0100-0x012F)
+    HEAP_SPECIAL_OFFSET_MISMATCH    = 0x0110,
+    HEAP_HEADER_OFFSET_INVALID      = 0x0111,
+    HEAP_TD_COUNT_OVERFLOW          = 0x0112,
+    HEAP_ITEMID_ALIGNMENT_INVALID   = 0x0113,
+    HEAP_FSM_SLOT_INVALID           = 0x0114,
+    HEAP_TUPLE_OVERLAP              = 0x0115,
+    HEAP_TD_SANITY_FAIL             = 0x0116,
+    HEAP_TUPLE_HEADER_SIZE_INVALID  = 0x0117,
+    HEAP_TUPLE_NUM_COLUMN_INVALID   = 0x0118,
+    HEAP_TUPLE_SIZE_MISMATCH        = 0x011A,
+    HEAP_TUPLE_FLAG_INCONSISTENT    = 0x011D,
+
+    // Index (0x0200-0x022F)
+    BTR_PAGE_TYPE_INVALID       = 0x0200,
+    BTR_SPLIT_STAT_INVALID      = 0x0201,
+    BTR_SPECIAL_OFFSET_INVALID  = 0x0203,
+    BTR_META_PAGE_ID_INVALID    = 0x0204,
+    INDEX_TUPLE_SIZE_MISMATCH   = 0x0210,
+    BTR_QUEUE_INCONSISTENT      = 0x0223,
+
+    // Undo (0x0300-0x031F)
+    UNDO_SLOT_STATE_INVALID     = 0x0300,
+    UNDO_SLOT_XID_INVALID       = 0x0301,
+    UNDO_REC_TYPE_INVALID       = 0x0310,
+    UNDO_SEG_FIRST_PAGE_INVALID = 0x0320,
+
+    // Segment (0x0400-0x041F)
+    SEG_MAGIC_MISMATCH              = 0x0400,
+    SEG_EXT_SIZE_INVALID            = 0x0401,
+    SEG_SEGMENT_TYPE_INVALID        = 0x0402,
+    BITMAP_META_EXTENT_SIZE_INVALID = 0x0410,
+    BITMAP_ALLOCATED_CNT_MISMATCH   = 0x0415,
+    FILE_BLOCK_ID_INVALID           = 0x0420,
+    SPACE_PAGE_VERSION_INVALID      = 0x0430,
+};
+```
+
+#### 3.1.3 校验结果
 
 ```cpp
 // include/dfx/dstore_verify_report.h
@@ -196,7 +281,7 @@ private:
 }  // namespace DSTORE
 ```
 
-#### 3.1.3 校验函数签名与注册表
+#### 3.1.4 校验函数签名与注册表
 
 ```cpp
 // include/dfx/dstore_page_verify.h
@@ -246,7 +331,7 @@ private:
 }  // namespace DSTORE
 ```
 
-#### 3.1.4 GUC 参数
+#### 3.1.5 GUC 参数
 
 ```cpp
 // include/dfx/dstore_page_verify.h（续）
@@ -275,14 +360,16 @@ inline VerifyModule GetDfxVerifyModule()
 }  // namespace DSTORE
 ```
 
+**性能约束**：GUC 参数在 Buffer 读写热路径上每次 I/O 都被读取，必须使用 `memory_order_relaxed`。GUC 值是配置提示（hint），无需与其他数据保持顺序一致性——实现为原子变量，非 GUC 框架直接注册，通过 Set/Get 函数访问。
+
 ### 3.2 公共接口
+
+#### 3.2.1 写入路径 inline 校验
 
 ```cpp
 // include/dfx/dstore_page_verify.h（续）
 
 namespace DSTORE {
-
-// ========== 写入路径 inline 校验 ==========
 
 // 根据 GUC 自动决定是否执行和级别
 // GUC=OFF 时仅读取一个 atomic 变量后返回 DSTORE_SUCC（零开销）
@@ -315,13 +402,31 @@ RetStatus VerifyPage(const Page* page, VerifyLevel level, VerifyReport* report);
 // 校验指定 PageId（自动从 buffer 读取页面）
 RetStatus VerifyPageById(const PageId& pageId, VerifyLevel level, VerifyReport* report);
 
-// ========== 初始化 ==========
-
-// 注册所有 17 种 PageType 的校验函数（在 StorageInstance 初始化时调用）
-void InitPageVerifiers();
-
 }  // namespace DSTORE
 ```
+
+#### 3.2.2 三场景入口
+
+```cpp
+/* 写路径：ERROR/FATAL 时触发 PANIC，report 为 nullptr 时不收集诊断 */
+RetStatus VerifyPageOnWrite(const Page *page, VerifyLevel level);
+
+/* 读路径：返回错误码，不 PANIC，通过 report 收集诊断（report 可为 nullptr） */
+RetStatus VerifyPageOnRead(const Page *page, VerifyLevel level, VerifyReport *report);
+
+/* 巡检模式：收集问题，不 PANIC，总是返回 DSTORE_SUCC（结果通过 report->HasError() 查询） */
+RetStatus VerifyPageFull(const Page *page, VerifyLevel level, VerifyReport *report);
+
+/* 注册 */
+RetStatus RegisterPageVerifier(PageType type, const char *typeName, VerifyModule module,
+    PageVerifyFunc lightFunc, PageVerifyFunc mediumFunc, PageVerifyFunc heavyFunc);
+void InitPageVerifiers();
+```
+
+**设计决策**：接口采用扁平参数（`VerifyLevel level, VerifyReport *report`）而非 `VerifyContext` 上下文结构体，原因：
+1. 热路径上减少一层间接访问，`level` 参数直接由调用方从 GUC 缓存传入
+2. `report` 参数可为 `nullptr`，支持 Buffer 读路径的**两阶段优化**（见 3.8 节）
+3. 校验函数不需要 `pdbId`、`bufMgr` 等上下文，避免不必要依赖
 
 ### 3.3 通用 Header 校验逻辑
 
@@ -358,114 +463,221 @@ void InitPageVerifiers();
       失败 → 报告 ERROR "special_offset_invalid"
 ```
 
+#### 3.3.1 通用 LIGHT 校验
+
+| # | 校验项 | 错误码 |
+|---|--------|--------|
+| 1 | `page != nullptr` | PAGE_NULL |
+| 2 | 全零页放行 | - |
+| 3 | `GetType()` 合法 | PAGE_TYPE_INVALID |
+| 4 | `GetSelfPageId().IsValid()` | PAGE_ID_INVALID |
+| 5 | 页号与期望一致（若 checkPageId） | PAGE_ID_MISMATCH |
+| 6 | CRC 正确（若 checkCrc） | PAGE_CRC_MISMATCH |
+| 7 | 边界合法：lower/upper/special | PAGE_BOUNDARY_INVALID |
+
+**约束**：
+
+- 热路径不得访问其他页面、不得加锁、不得修改页内容。
+- CR 页面不进入页面校验流程，发现页为 CR 页面时直接跳过，不做 CRC、页头或页型特有校验。
+
+#### 3.3.2 通用 MEDIUM 校验
+
+| # | 校验项 |
+|---|--------|
+| 1 | `m_lower >= sizeof(PageHeader)` |
+| 2 | `m_lower <= m_upper <= pageSize` |
+| 3 | `m_special.m_offset` 合法且对齐 |
+| 4 | 非全零页不能 `PageNoInit()` |
+
 ### 3.4 各 PageType 专用校验逻辑
 
-#### 3.4.1 Heap 页面（HEAP_PAGE_TYPE）
+#### 3.4.1 Heap 模块（2 种）
 
-**轻量级校验**（在通用 header 校验之后）：
-- HeapPageHeader.potentialDelSize <= 可用空间
-- HeapPageHeader.fsmIndex.page 非 INVALID 或页面为首次写入
+**HEAP_PAGE_TYPE**
 
-**重量级校验**：
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `GetType() == HEAP_PAGE_TYPE` | PAGE_TYPE_INVALID |
+| LIGHT | `specialOffset == pageSize` | HEAP_SPECIAL_OFFSET_MISMATCH |
+| LIGHT | `headerOffset == HEAP_PAGE_DATA_OFFSET` | HEAP_HEADER_OFFSET_INVALID |
+| LIGHT | TD count 不超限 | HEAP_TD_COUNT_OVERFLOW |
+| MEDIUM | ItemId 数组对齐 | HEAP_ITEMID_ALIGNMENT_INVALID |
+| MEDIUM | `m_lower` 与 itemCount 精确等式 | HEAP_ITEMID_ALIGNMENT_INVALID |
+| MEDIUM | FSM slot 范围合法 | HEAP_FSM_SLOT_INVALID |
+| MEDIUM | TD 数组状态合法 | HEAP_TD_SANITY_FAIL |
+| HEAVY | ItemId 状态-len 不变量 | HEAP_TUPLE_HEADER_SIZE_INVALID |
+| HEAVY | tuple 边界无重叠 | HEAP_TUPLE_OVERLAP |
+| HEAVY | tuple size 与 ItemId.len 一致 | HEAP_TUPLE_SIZE_MISMATCH |
+| HEAVY | 列数 <= 1664 | HEAP_TUPLE_NUM_COLUMN_INVALID |
+| HEAVY | flag 组合合理 | HEAP_TUPLE_FLAG_INCONSISTENT |
+| HEAVY | 列长度累加（需 TupleDesc） | HEAP_TUPLE_SIZE_MISMATCH |
 
-```
-Heap 页面重量级校验
-│
-├── 1. TD 数组校验
-│     ├── tdCount 在 [MIN_TD_COUNT(2), MAX_TD_COUNT(128)] 范围内
-│     ├── TD 数组空间不超过 m_lower
-│     └── 每个 TD 的状态校验：
-│           ├── m_status 值在 {UNOCCUPY_AND_PRUNEABLE, OCCUPY_TRX_IN_PROGRESS, OCCUPY_TRX_END} 中
-│           ├── UNOCCUPY_AND_PRUNEABLE: m_xid 应为 INVALID 或有效 recycled xid
-│           ├── OCCUPY_TRX_IN_PROGRESS: m_xid != INVALID, m_undoRecPtr != INVALID
-│           ├── OCCUPY_TRX_END: m_xid != INVALID, m_csn 应有效
-│           └── m_csnStatus 在 {IS_INVALID, IS_PREV_XID_CSN, IS_CUR_XID_CSN} 中
-│
-├── 2. ItemId 数组校验
-│     遍历所有 ItemId（从 FIRST_ITEM_OFFSET_NUMBER 到 MaxOffsetNumber）：
-│     ├── ITEM_ID_UNUSED (flags=0): m_len == 0, m_offset == 0
-│     ├── ITEM_ID_NORMAL (flags=1):
-│     │     ├── m_len > 0
-│     │     ├── m_offset >= DataHeaderSize + TdDataSize
-│     │     ├── m_offset + m_len <= BLCKSZ（或 special region offset）
-│     │     └── 记录 (offset, len) 用于重叠检测
-│     ├── ITEM_ID_UNREADABLE_RANGE_HOLDER (flags=2): m_len > 0
-│     └── ITEM_ID_NO_STORAGE (flags=3):
-│           ├── m_tdId < tdCount
-│           ├── m_tdStatus 在有效范围 [0, 2]
-│           └── m_tupLiveMode 在有效范围 [0, 6]
-│
-├── 3. Item 存储区域重叠检测
-│     将所有 NORMAL ItemId 的 (offset, offset+len) 区间排序
-│     检测是否存在区间重叠
-│
-├── 4. ItemId datalen vs Tuple size 一致性
-│     对每个 NORMAL ItemId：
-│     ├── 读取对应 offset 位置的 HeapDiskTuple
-│     └── ItemId.m_len == tuple.m_ext_info.m_tuple_info.m_size
-│         不一致 → 报告 ERROR "itemid_tuple_size_mismatch"
-│
-└── 5. TD-Tuple 交叉引用
-      对每个 NORMAL ItemId 的 tuple：
-      ├── tuple.m_ext_info.m_tuple_info.m_tdId < tdCount
-      └── 引用的 TD 状态与 tuple 状态逻辑一致
-```
+**HEAP_SEGMENT_META_PAGE_TYPE**
 
-#### 3.4.2 Index 页面（INDEX_PAGE_TYPE）
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `segmentType ∈ {HEAP, HEAP_TEMP}` | SEG_SEGMENT_TYPE_INVALID |
+| MEDIUM | `numFsms <= MAX` | HEAP_FSM_SLOT_INVALID |
+| MEDIUM | fsmMetaPageId 有效性 | HEAP_FSM_SLOT_INVALID |
+| HEAVY | assignedNodeId 有效 | HEAP_FSM_SLOT_INVALID |
 
-**轻量级校验**：
-- Special region offset 和大小能容纳 `BtrPageLinkAndStatus`
-- BtrPageLinkAndStatus.status.bitVal.type 在 {LEAF_PAGE, INTERNAL_PAGE, META_PAGE} 中
+---
 
-**重量级校验**：
+#### 3.4.2 Index 模块（4 种）
 
-```
-Index 页面重量级校验
-│
-├── 1. BtrPageLinkAndStatus 完整性
-│     ├── level <= BTREE_HIGHEST_LEVEL (32)
-│     ├── type 在有效枚举范围内
-│     ├── splitStat 在 {SPLIT_COMPLETE, SPLIT_INCOMPLETE} 中
-│     ├── liveStat 在有效枚举范围内
-│     └── prev/next sibling link 格式有效（INVALID 或合法 PageId）
-│
-├── 2. High Key 校验
-│     ├── 非最右页面：ItemId[BTREE_PAGE_HIKEY(1)] 必须为 NORMAL 状态
-│     ├── 读取 high key 值
-│     └── high key >= 所有其他 key（遍历 offset 2..MaxOffset，逐一比较）
-│
-├── 3. 页内 Key 排序
-│     ├── 确定起始 offset（最右页面从 HIKEY，非最右从 FIRSTKEY）
-│     └── 相邻 key 满足排序关系（升序）
-│         key[i] <= key[i+1]
-│
-├── 4. Key 类型一致性（需要 BtrMeta 信息时）
-│     如果可访问 BtrMeta：
-│     ├── 每个 key 的属性数量 <= BtrMeta.nkeyAtts
-│     └── key 值类型与 BtrMeta.attTypeIds 一致
-│
-└── 5. ItemId 状态校验（复用通用 ItemId 校验逻辑）
-```
+**INDEX_PAGE_TYPE**
 
-#### 3.4.3 其他页面类型
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `BtrPageType ∈ {LEAF, INTERNAL, META}` | BTR_PAGE_TYPE_INVALID |
+| LIGHT | 非 META 页有合法 metaPageId | BTR_META_PAGE_ID_INVALID |
+| LIGHT | splitStat / liveStat 枚举范围 | BTR_SPLIT_STAT_INVALID |
+| LIGHT | specialOffset 正确 | BTR_SPECIAL_OFFSET_INVALID |
+| MEDIUM | headerOffset 正确 | PAGE_BOUNDARY_INVALID |
+| MEDIUM | leaf/internal 的 m_lower 精确等式 | PAGE_BOUNDARY_INVALID |
+| HEAVY | tuple 无重叠 | INDEX_TUPLE_SIZE_MISMATCH |
+| HEAVY | IndexTuple.size == ItemId.len | INDEX_TUPLE_SIZE_MISMATCH |
+| HEAVY | pivot tuple key num 合法 | INDEX_TUPLE_SIZE_MISMATCH |
+| HEAVY | 列长度（需 BtrMeta*） | INDEX_TUPLE_SIZE_MISMATCH |
 
-| PageType | 轻量级特有校验 | 重量级特有校验 |
-|----------|------------|------------|
-| **FSM_PAGE_TYPE** | 无额外 | FSM entry 值在有效 category 范围内 |
-| **FSM_META_PAGE_TYPE** | 无额外 | numFsmLevels <= MAX_LEVEL, listRange 递增, numTotalPages >= numUsedPages |
-| **DATA_SEGMENT_META_PAGE_TYPE** | 无额外 | segmentType 有效, totalBlockCount > 0, extent 链头指针格式合法 |
-| **HEAP_SEGMENT_META_PAGE_TYPE** | 无额外 | 继承 DataSegmentMeta 校验 + numFsms <= MAX_FSM_TREE, dataFirst/dataLast 格式合法 |
-| **UNDO_SEGMENT_META_PAGE_TYPE** | 无额外 | segmentType == UNDO, extent 链头指针格式合法 |
-| **TRANSACTION_SLOT_PAGE** | 无额外 | version 有效, 每个 slot status 在 7 种合法状态中, CSN-status 一致性 |
-| **UNDO_PAGE_TYPE** | 无额外 | UndoRecordPageHeader prev/next 格式合法, version 有效 |
-| **TBS_EXTENT_META_PAGE_TYPE** | magic == EXTENT_META_MAGIC | extSize 在 {8,128,1024,8192} 中, nextExtMetaPageId 格式合法 |
-| **TBS_BITMAP_PAGE_TYPE** | 无额外 | allocatedExtentCount == popcount(bitmap), firstDataPageId 格式合法 |
-| **TBS_BITMAP_META_PAGE_TYPE** | 无额外 | groupCount <= MAX_BITMAP_GROUP_CNT(512), extentSize 有效 |
-| **TBS_FILE_META_PAGE_TYPE** | 无额外 | 文件元数据字段范围合法 |
-| **TBS_SPACE_META_PAGE_TYPE** | 无额外 | tablespace 元数据字段合法 |
-| **BTR_QUEUE_PAGE_TYPE** | 无额外 | queue 结构字段范围合法 |
-| **BTR_RECYCLE_PARTITION_META_PAGE_TYPE** | 无额外 | partition 元数据一致性 |
-| **BTR_RECYCLE_ROOT_META_PAGE_TYPE** | 无额外 | root 元数据一致性 |
+**BTR_QUEUE_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | head/tail/size/capacity 基本边界 | BTR_QUEUE_INCONSISTENT |
+| MEDIUM | `capacity > 0` | BTR_QUEUE_INCONSISTENT |
+| MEDIUM | `size <= capacity` | BTR_QUEUE_INCONSISTENT |
+| MEDIUM | `size==0 → head==tail` | BTR_QUEUE_INCONSISTENT |
+| MEDIUM | `(head+size)%capacity == tail` | BTR_QUEUE_INCONSISTENT |
+| HEAVY | 队列元素不越界 | BTR_QUEUE_INCONSISTENT |
+
+**BTR_RECYCLE_PARTITION_META_PAGE_TYPE**
+
+| 级别 | 校验项 |
+|------|--------|
+| LIGHT | `createdXid != INVALID_XID` |
+| MEDIUM | recycleQueueHead / freeQueueHead 合法 |
+
+**BTR_RECYCLE_ROOT_META_PAGE_TYPE**
+
+| 级别 | 校验项 |
+|------|--------|
+| LIGHT | `createdXid != INVALID_XID` |
+| MEDIUM | recyclePartitionMeta[] 条目有效 |
+
+---
+
+#### 3.4.3 Undo 模块（3 种）
+
+**TRANSACTION_SLOT_PAGE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `lower ∈ {sizeof(Page), TRX_PAGE_HEADER_SIZE}` | PAGE_BOUNDARY_INVALID |
+| LIGHT | `upper == BLCKSZ` | PAGE_BOUNDARY_INVALID |
+| HEAVY | nextFreeLogicSlotId 不超范围 | UNDO_SLOT_STATE_INVALID |
+| HEAVY | 每个 slot 状态合法 | UNDO_SLOT_STATE_INVALID |
+| HEAVY | committed/aborted/prepared slot 有合法 CSN | UNDO_SLOT_XID_INVALID |
+
+**实现说明**：`Page::Init()` 设置 `m_lower = sizeof(Page)` = 42，而 `InitTxnSlotPage` 不修正 `m_lower`。因此空页面的 `lower == sizeof(Page)` 是正常状态。校验必须同时接受 42 和 `TRX_PAGE_HEADER_SIZE` (58)。
+
+**UNDO_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `lower >= sizeof(Page) && lower <= upper` | PAGE_BOUNDARY_INVALID |
+| LIGHT | `cur == selfPageId`（若 cur 非 INVALID） | PAGE_ID_MISMATCH |
+| HEAVY | prev/next 不指向自身 | PAGE_ID_INVALID |
+| HEAVY | undo record type 合法 | UNDO_REC_TYPE_INVALID |
+| HEAVY | undo record 长度不越界 | PAGE_BOUNDARY_INVALID |
+
+**实现说明**：`InitUndoRecPage` 调用 `Page::Init` 后不修正 `m_lower`，因此空页面的 `lower == sizeof(Page)` = 42 是正常状态（非 `UNDO_RECORD_PAGE_HEADER_SIZE` = 64）。
+
+**UNDO_SEGMENT_META_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `magic == SEGMENT_META_MAGIC` | SEG_MAGIC_MISMATCH |
+| LIGHT | `segmentType == UNDO_SEGMENT_TYPE` | SEG_SEGMENT_TYPE_INVALID |
+| MEDIUM | firstUndoPageId 合法 | UNDO_SEG_FIRST_PAGE_INVALID |
+| MEDIUM | plsn/glsn 与 header 一致 | PAGE_BOUNDARY_INVALID |
+
+---
+
+#### 3.4.4 Segment 模块（6 种）
+
+**DATA_SEGMENT_META_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `magic == SEGMENT_META_MAGIC` | SEG_MAGIC_MISMATCH |
+| LIGHT | segmentType 合法 | SEG_SEGMENT_TYPE_INVALID |
+| MEDIUM | totalBlockCount > 0 | SEG_SEGMENT_TYPE_INVALID |
+| MEDIUM | dataBlockCount <= totalBlockCount | SEG_SEGMENT_TYPE_INVALID |
+| MEDIUM | dataFirst/dataLast 与 count 一致 | SEG_SEGMENT_TYPE_INVALID |
+| MEDIUM | plsn/glsn 一致 | PAGE_BOUNDARY_INVALID |
+
+**TBS_EXTENT_META_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | `magic == EXTENT_META_MAGIC` | SEG_MAGIC_MISMATCH |
+| LIGHT | extSize ∈ {8, 128, 1024, 8192} | SEG_EXT_SIZE_INVALID |
+| MEDIUM | nextExtMetaPageId 合法 | PAGE_ID_INVALID |
+| HEAVY | blockId % extSize == 0 | PAGE_ID_INVALID |
+
+**TBS_BITMAP_META_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | extentSize 合法 | BITMAP_META_EXTENT_SIZE_INVALID |
+| LIGHT | groupCount <= MAX | BITMAP_META_EXTENT_SIZE_INVALID |
+| MEDIUM | validOffset 范围合法 | BITMAP_META_EXTENT_SIZE_INVALID |
+| MEDIUM | validOffset 精确等式 | BITMAP_META_EXTENT_SIZE_INVALID |
+| HEAVY | firstBitmapPageId 有效 | PAGE_ID_INVALID |
+
+**TBS_BITMAP_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | firstDataPageId 有效 | PAGE_ID_INVALID |
+| LIGHT | allocatedExtentCount <= DF_BITMAP_BIT_CNT | BITMAP_ALLOCATED_CNT_MISMATCH |
+| MEDIUM | allocatedExtentCount == popcount(bitmap) | BITMAP_ALLOCATED_CNT_MISMATCH |
+
+**TBS_FILE_META_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | blockId == 0 | FILE_BLOCK_ID_INVALID |
+| LIGHT | ddlXid != INVALID_XID | FILE_BLOCK_ID_INVALID |
+| MEDIUM | pageBaseGlsn 合法 | PAGE_BOUNDARY_INVALID |
+| HEAVY | hwm <= datafileBlockCount | FILE_BLOCK_ID_INVALID |
+
+**TBS_SPACE_META_PAGE_TYPE**
+
+| 级别 | 校验项 | 错误码 |
+|------|--------|--------|
+| LIGHT | pageVersion 在支持范围 | SPACE_PAGE_VERSION_INVALID |
+
+---
+
+#### 3.4.5 FSM 模块（2 种）
+
+**FSM_PAGE_TYPE**
+
+| 级别 | 校验项 |
+|------|--------|
+| LIGHT | 通用 LIGHT |
+| MEDIUM | 通用 MEDIUM |
+
+**FSM_META_PAGE_TYPE**
+
+| 级别 | 校验项 |
+|------|--------|
+| LIGHT | 通用 LIGHT |
+| MEDIUM | 通用 MEDIUM |
+
+**说明**：FSM 结构简单，暂无高价值特有校验，复用通用校验即可。
 
 ### 3.5 模块注册机制
 
@@ -502,6 +714,35 @@ void RegisterHeapPageVerifier()
 
 }  // namespace DSTORE
 ```
+
+三槽位注册示例（使用自由函数接口）：
+
+```cpp
+/* 各模块在独立 cpp 文件中实现注册函数 */
+
+// src/heap/dstore_heap_page_verify.cpp
+void RegisterHeapPageVerifier() {
+    (void)RegisterPageVerifier(PageType::HEAP_PAGE_TYPE, "HeapPage", VerifyModule::HEAP,
+        VerifyHeapPageLightweight, VerifyHeapPageMediumweight, VerifyHeapPageHeavyweight);
+    (void)RegisterPageVerifier(PageType::HEAP_SEGMENT_META_PAGE_TYPE, "HeapSegmentMetaPage",
+        VerifyModule::HEAP,
+        VerifyHeapSegMetaLightweight, nullptr, VerifyHeapSegMetaHeavyweight);
+}
+
+// src/undo/dstore_undo_page_verify.cpp
+void RegisterUndoPageVerifiers() {
+    (void)RegisterPageVerifier(PageType::UNDO_PAGE_TYPE, "UndoRecordPage", VerifyModule::UNDO,
+        VerifyUndoRecordPageLightweight, nullptr, VerifyUndoRecordPageHeavyweight);
+    (void)RegisterPageVerifier(PageType::TRANSACTION_SLOT_PAGE, "TransactionSlotPage",
+        VerifyModule::UNDO,
+        VerifyTransactionSlotPageLightweight, nullptr, VerifyTransactionSlotPageHeavyweight);
+}
+```
+
+**说明**：
+- `mediumFunc` 参数可为 `nullptr`，表示该页面类型无 MEDIUM 级校验
+- `RegisterPageVerifier` 是自由函数，内部操作全局 `g_pageVerifyRegistry`
+- 各模块的 Register 函数在引擎启动时由 `InitPageVerifiers()` 统一调用
 
 统一初始化：
 
@@ -580,14 +821,119 @@ if (ret != DSTORE_SUCC) {
 }
 ```
 
-### 3.7 Transient State 处理
+### 3.7 特殊场景
 
-| 瞬态场景 | 处理方式 |
-|----------|---------|
-| All-zero page（未初始化） | 通用 header 校验阶段识别并跳过，返回 SUCC |
-| B-tree mid-split (SPLIT_INCOMPLETE) | 重量级校验时识别 splitStat，对 SPLIT_INCOMPLETE 的页面放宽 sibling link 校验，报告 WARNING 而非 ERROR |
-| In-progress transaction（TD 状态 OCCUPY_TRX_IN_PROGRESS） | 单页面校验时作为合法 TD 状态接受；跨页面校验时由 VerifyContext 的 MVCC 快照处理 |
-| 页面正在被修改 | 写入路径 inline 校验在页面修改完成后、解锁前执行，此时页面内容已稳定 |
+| 场景 | 处理 | 实现位置 |
+|------|------|----------|
+| 全零页 | `IsAllZeroPage()` 直接放行 | Registry::Verify 入口 |
+| redo 阶段 | 强制 NONE（由调用方控制 level） | Buffer 层 |
+| undo 阶段 | 最高 LIGHT（由调用方控制 level） | Buffer 层 |
+| CR 页面 | `ShouldSkipCrPage()` 跳过，**必须在 CRC 通过后调用** | Registry::Verify，ValidateGenericLight 之后 |
+| B-tree mid-split | LIGHT 放宽 splitStat 检查，HEAVY 报 WARNING | IndexPageVerifier |
+| Undo 并发 purge | 不持锁，lower 范围放宽（接受 sizeof(Page)） | UndoPageVerifier |
+| Page::Init 后 lower 未修正 | Undo/TxnSlot 页面 lower=42 为合法状态 | UndoPageVerifier |
+
+### 3.8 Buffer 层集成（两阶段优化）
+
+Buffer 读写路径是校验框架最关键的性能约束点。每次 I/O 都经过校验，必须最小化成功路径的开销。
+
+**写路径**（`dstore_buf_mgr.cpp: WriteBlock / WriteBlockAsync / FlushDirtyPageUnderLockIfRetry`）：
+```cpp
+RetStatus VerifyPageBeforePersist(Page *page) {
+    VerifyLevel level = GetDfxVerifyLevel();  /* relaxed load */
+    if (page == nullptr || level == VerifyLevel::NONE || !IsPageVerifierRegistered(page->GetType())) {
+        return DSTORE_SUCC;
+    }
+    page->SetChecksum();
+    return VerifyPageOnWrite(page, level);  /* 失败触发 PANIC */
+}
+```
+
+**读路径**（`dstore_buf_mgr.cpp: ReadBlock`）-- **两阶段**：
+```cpp
+RetStatus VerifyPageAfterRead(Page *page) {
+    VerifyLevel level = GetDfxVerifyLevel();  /* relaxed load，缓存避免重复读 */
+    if (page == nullptr || level == VerifyLevel::NONE || !IsPageVerifierRegistered(page->GetType())) {
+        return DSTORE_SUCC;
+    }
+
+    /* 第一阶段：快速校验，report=nullptr，不做任何堆分配 */
+    RetStatus ret = VerifyPageOnRead(page, level, nullptr);
+    if (STORAGE_FUNC_SUCC(ret)) {
+        return DSTORE_SUCC;  /* 成功路径：零分配 */
+    }
+
+    /* 第二阶段：失败后构造 VerifyReport 获取诊断信息 */
+    VerifyReport report;
+    (void)VerifyPageOnRead(page, level, &report);
+    std::string msg = report.FormatText();
+    ErrLog(DSTORE_ERROR, MODULE_BUFMGR, ErrMsg("[PAGE_VERIFY_FAILED] ...%s", msg.c_str()));
+    storage_set_error(BUFFER_ERROR_PAGE_VERIFY_FAILED);
+    return ret;
+}
+```
+
+**设计要点**：
+- 成功路径（绝大多数页面）：零堆分配、零系统调用、两次 `relaxed` 原子 load（level + modules）
+- 失败路径（极少数）：允许 `std::vector`/`std::string` 分配，因为即将记录 ERROR 日志
+- CRC 校验由 Buffer 层独立处理（PANIC on mismatch），DFX 框架补充非 CRC 检查
+
+**性能约束**：`VerifyReport` 内含 `std::vector`，构造函数调用 `GetCurrentTimestamp()`。**禁止在 Buffer 读写热路径上无条件构造**——必须使用两阶段模式。
+
+### 3.9 Registry 分发流程
+
+```cpp
+RetStatus PageVerifyRegistry::Verify(const Page *page, VerifyLevel level, VerifyReport *report) const
+{
+    PageType type = page->GetType();
+    if (!m_registered[static_cast<size_t>(type)]) {
+        return DSTORE_SUCC;  /* 未注册类型，跳过 */
+    }
+
+    /* 模块过滤 */
+    const PageVerifyEntry &entry = m_entries[static_cast<size_t>(type)];
+    if (!IsModuleEnabledInternal(entry.moduleGroup)) {
+        return DSTORE_SUCC;
+    }
+
+    /* 全零页 / CR 页 跳过（CR 页必须在 CRC 通过后判断） */
+    if (IsAllZeroPage(page)) return DSTORE_SUCC;
+
+    /* 通用校验 */
+    RetStatus ret = ValidateGenericLight(page, report);
+    if (ret != DSTORE_SUCC) return ret;
+
+    /* CRC 通过后安全判断 CR 页 */
+    if (ShouldSkipCrPage(page)) return DSTORE_SUCC;
+
+    if (level >= VerifyLevel::MEDIUM) {
+        ret = ValidateGenericMedium(page, report);
+        if (ret != DSTORE_SUCC) return ret;
+    }
+
+    /* 页面特有校验：light → medium → heavy 链式调用 */
+    if (entry.lightFunc) {
+        ret = entry.lightFunc(page, level, report);
+        if (ret != DSTORE_SUCC) return ret;
+    }
+    if (level >= VerifyLevel::MEDIUM && entry.mediumFunc) {
+        ret = entry.mediumFunc(page, level, report);
+        if (ret != DSTORE_SUCC) return ret;
+    }
+    if (level >= VerifyLevel::HEAVY && entry.heavyFunc) {
+        ret = entry.heavyFunc(page, level, report);
+        if (ret != DSTORE_SUCC) return ret;
+    }
+
+    return DSTORE_SUCC;
+}
+```
+
+**关键设计决策**：
+- `ShouldSkipCrPage` 必须在 `ValidateGenericLight`（含 CRC）之后调用，因为 CR 判断需要 `static_cast<DataPage*>` 读取页面内容，在 CRC 未验证前类型字段不可信
+- Fail-fast：任一级别失败立即返回，不继续后续检查。巡检模式 `VerifyPageFull` 在外层处理收集逻辑
+- 校验函数签名 `(const Page*, VerifyLevel, VerifyReport*)` 统一三个级别，`report` 可为 `nullptr`（此时仅判断 pass/fail，不收集诊断信息）
+- 不使用单例 `Instance()` 模式的全局 Registry 通过全局变量 `g_pageVerifyRegistry` + 自由函数 `RegisterPageVerifier()` 对外暴露，避免静态初始化顺序问题，`InitPageVerifiers()` 在引擎启动时显式调用
 
 ---
 
@@ -595,34 +941,31 @@ if (ret != DSTORE_SUCC) {
 
 ```
 include/dfx/
-├── dstore_page_verify.h          # Registry, GUC, VerifyPageInline, InitPageVerifiers
-└── dstore_verify_report.h        # VerifyLevel, VerifyModule, VerifySeverity, VerifyResult, VerifyReport
+├── dstore_page_verify.h          # Registry、入口函数、GUC 接口
+└── dstore_verify_report.h        # VerifyReport、VerifyResult、枚举定义
 
 src/dfx/
-├── dstore_page_verify.cpp        # Registry 实现, 通用 header 校验, InitPageVerifiers
-└── dstore_verify_report.cpp      # VerifyReport 实现
+├── dstore_page_verify.cpp        # Registry 实现、三场景入口、GUC 原子变量
+├── dstore_verify_report.cpp      # VerifyReport 实现（FormatText/FormatJson）
+└── dstore_heap_verify.cpp        # HeapSegmentVerifier（段级遍历）
 
-src/heap/
-└── dstore_heap_page_verify.cpp   # Heap 轻量级+重量级校验, RegisterHeapPageVerifier
+src/heap/       dstore_heap_page_verify.cpp           # Heap 单页校验
+src/index/      dstore_index_page_verify.cpp          # Index 单页校验
+                dstore_btr_recycle_page_verify.cpp    # BtrRecycle 校验
+src/undo/       dstore_undo_page_verify.cpp           # Undo 单页校验
+src/page/       dstore_fsm_page_verify.cpp            # FSM 校验
+src/tablespace/ dstore_tbs_page_verify.cpp            # Tablespace 校验
+src/dfx/        dstore_segment_page_verify.cpp        # Segment 校验
 
-src/index/
-├── dstore_index_page_verify.cpp  # Index 轻量级+重量级校验, RegisterIndexPageVerifier
-└── dstore_btr_recycle_page_verify.cpp  # BtrQueue/Recycle 校验
+src/buffer/     dstore_buf_mgr.cpp                    # Buffer 集成（读写路径）
+                dstore_buf_mgr_temporary.cpp          # 临时表 Buffer 集成
 
-src/page/
-└── dstore_fsm_page_verify.cpp    # FSM/FSMMeta 校验
+interface/errorcode/
+                dstore_buf_error_code.h               # PAGE_VERIFY_FAILED 错误码
+                dstore_buf_error_code_map.h           # 错误码映射
 
-src/undo/
-└── dstore_undo_page_verify.cpp   # Undo/TxnSlot 校验
-
-src/tablespace/
-└── dstore_tbs_page_verify.cpp    # Bitmap/BitmapMeta/Extent/File/Space 校验
-
-tests/unittest/ut_dfx/
-├── ut_page_verify_registry.cpp   # Registry 注册/分发/GUC 测试
-├── ut_verify_report.cpp          # Report 格式化测试
-├── ut_heap_page_verify.cpp       # Heap 校验测试
-└── ut_index_page_verify.cpp      # Index 校验测试
+tests/unittest/ut_dfx/                                # 单元测试（9 个文件）
+tests/dstore_stress_verify/                           # 长稳 + 故障注入 + 崩溃恢复验证工具
 ```
 
 ---
@@ -655,7 +998,58 @@ tests/unittest/ut_dfx/
 
 ---
 
-## 6. 风险与应对
+## 6. GUC 参数配置
+
+### 6.1 参数定义
+
+```sql
+-- 校验级别：NONE=0, LIGHT=1, MEDIUM=2, HEAVY=3
+dstore_page_verify_level = 'LIGHT'
+
+-- 启用模块：逗号分隔，空字符串表示全部禁用
+dstore_page_verify_modules = 'heap,index,undo'
+```
+
+### 6.2 模块与页类型映射
+
+| 模块名 | 位掩码 | 覆盖页类型 | 默认 |
+|--------|--------|------------|------|
+| `heap` | bit0 | HEAP_PAGE、HEAP_SEGMENT_META | ✅ |
+| `index` | bit1 | INDEX_PAGE、BTR_QUEUE、BTR_RECYCLE_* | ✅ |
+| `undo` | bit2 | TRANSACTION_SLOT、UNDO_PAGE、UNDO_SEGMENT_META | ✅ |
+| `segment` | bit3 | DATA_SEGMENT_META、TBS_* (6 种) | ❌ |
+| `fsm` | bit4 | FSM_PAGE、FSM_META | ❌ |
+
+### 6.3 恢复阶段覆盖
+
+| 阶段 | GUC 覆盖规则 |
+|------|-------------|
+| redo | 强制 `NONE`，忽略 GUC 设置 |
+| undo | 最高 `LIGHT`，若 GUC 设置更高则降级 |
+| 正常运行 | 使用 GUC 设置 |
+
+### 6.4 使用示例
+
+```sql
+-- 关闭所有校验
+SET dstore_page_verify_level = 'NONE';
+
+-- 仅开启 heap 模块的 LIGHT 校验
+SET dstore_page_verify_level = 'LIGHT';
+SET dstore_page_verify_modules = 'heap';
+
+-- 开启 heap/index/undo/segment 的 MEDIUM 校验（巡检场景）
+SET dstore_page_verify_level = 'MEDIUM';
+SET dstore_page_verify_modules = 'heap,index,undo,segment';
+
+-- 开启全部模块的 HEAVY 校验（离线排障）
+SET dstore_page_verify_level = 'HEAVY';
+SET dstore_page_verify_modules = 'heap,index,undo,segment,fsm';
+```
+
+---
+
+## 7. 风险与应对
 
 | 风险 | 影响 | 应对措施 |
 |------|------|---------|
@@ -663,3 +1057,21 @@ tests/unittest/ut_dfx/
 | 校验误报（false positive） | 干扰正常操作 | 充分处理 transient state；使用 WARNING 区分可疑与确定性问题 |
 | 新增 PageType 忘记注册 | 新类型无校验 | InitPageVerifiers 中添加编译期 static_assert 确保注册数量 == MAX_PAGE_TYPE - 1 |
 | std::vector 内存分配与 DstoreMemoryContext 冲突 | 潜在内存管理问题 | VerifyReport 生命周期短（单次校验），使用默认 allocator 独立于 MemoryContext；如需集成可提供自定义 allocator |
+
+---
+
+## 8. 配套验证工具
+
+为配合页面校验 DFX 能力落地，需要提供一个独立于上层 SQL 引擎的验证工具，用于在纯存储引擎环境下验证页面校验框架是否按设计生效。
+
+该工具的目的不是替代单元测试或业务压测，而是补足两类验证能力：
+
+- **长稳验证**：在类似 `sysbench` / `tpcc` 的持续读写负载下开启页面校验，验证校验逻辑在长时间运行中的稳定性、性能影响和误报情况。
+- **故障发现验证**：对 heap/index/undo/segment 等页面注入典型损坏，验证 `OnWrite`、`OnRead`、`VerifyPageFull` 三类路径都能按预期发现问题，并输出清晰诊断结果。
+
+该工具应服务于以下目标：
+
+- 在没有上层 SQL 引擎的情况下，直接驱动 open-dstore 存储引擎完成校验验证
+- 复用现有 workload 与 DFX 校验接口，降低验证成本
+- 支持构造可重复的损坏场景，用于回归测试和问题复现
+- 为后续演示、联调、验收提供统一入口

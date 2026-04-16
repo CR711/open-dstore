@@ -119,6 +119,14 @@ public:
         return recyclePartitionMeta[id];
     }
 
+    PageId GetRecyclePartitionMetaPageId(uint16 id) const
+    {
+        if (unlikely(id >= MAX_BTR_RECYCLE_PARTITION)) {
+            return INVALID_PAGE_ID;
+        }
+        return recyclePartitionMeta[id];
+    }
+
     void SetRecyclePartitionMeta(uint16 id, const PageId recyclePartitionMetaPage)
     {
         recyclePartitionMeta[id] = recyclePartitionMetaPage;

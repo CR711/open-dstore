@@ -36,8 +36,8 @@
 - [X] T008 [P] Implement VerifyReport class in `include/dfx/dstore_verify_report.h` and `src/dfx/dstore_verify_report.cpp` — AddResult(), HasError(), GetErrorCount(), GetRetStatus(), FormatText(), FormatJson(), DISALLOW_COPY_AND_MOVE
 - [X] T009 Implement PageVerifyFunc typedef, PageVerifyEntry struct, and PageVerifyRegistry class in `include/dfx/dstore_page_verify.h` — Register(), Verify(), IsRegistered(), std::array-based dispatch
 - [X] T010 Implement PageVerifyRegistry in `src/dfx/dstore_page_verify.cpp` — generic header validation (CRC via CheckPageCrcMatch, lower/upper bounds, LSN sanity, page type, special region offset) before dispatching to registered type-specific functions
-- [X] T011 Implement VerifyPageInline() and VerifyPage() free functions in `src/dfx/dstore_page_verify.cpp` — GUC level/module check, dispatch to registry
-- [X] T012 [P] Implement GUC parameters `dfx_verify_level` (OFF/LIGHTWEIGHT/HEAVYWEIGHT) and `dfx_verify_module` (HEAP/INDEX/ALL) as global atomic variables with getter/setter functions in `include/dfx/dstore_page_verify.h` and `src/dfx/dstore_page_verify.cpp`
+- [X] T011 Implement VerifyPageOnWrite()/OnRead()/Full() [v1: VerifyPageInline()] and VerifyPage() free functions in `src/dfx/dstore_page_verify.cpp` — GUC level/module check, dispatch to registry
+- [X] T012 [P] Implement GUC parameters `dfx_verify_level` (NONE/LIGHT/MEDIUM/HEAVY) [v1: OFF/LIGHTWEIGHT/HEAVYWEIGHT] and `dfx_verify_module` (HEAP/INDEX/ALL) as global atomic variables with getter/setter functions in `include/dfx/dstore_page_verify.h` and `src/dfx/dstore_page_verify.cpp`
 - [X] T013 [P] Implement VerifyContext class in `include/dfx/dstore_verify_context.h` and `src/dfx/dstore_verify_context.cpp` — holds VerifyReport*, SnapshotData*, sampleRatio, isOnline, visitedPages (std::unordered_set<uint64>), maxErrors
 - [X] T014 Write unit tests for VerifyReport in `tests/unittest/ut_dfx/ut_verify_report.cpp` — test AddResult, HasError, GetRetStatus, FormatText, FormatJson
 - [X] T015 Write unit tests for PageVerifyRegistry in `tests/unittest/ut_dfx/ut_page_verify_registry.cpp` — test Register, Verify dispatch, unregistered type handling, GUC level filtering
@@ -97,7 +97,7 @@
 **InitPageVerifiers and inline integration:**
 
 - [X] T035 [US1] Implement InitPageVerifiers() in `src/dfx/dstore_page_verify.cpp` — call all 17 Register*Verifier() functions; call from StorageInstance initialization path
-- [X] T036 [US1] Embed VerifyPageInline() calls at page write/flush sites — dirty page flush path, and key CRUD page modification paths in `src/buffer/`, `src/heap/`, `src/index/` (add after page modification, before marking dirty or writing out)
+- [X] T036 [US1] Embed VerifyPageOnWrite()/OnRead() [v1: VerifyPageInline()] calls at page write/flush sites — dirty page flush path, and key CRUD page modification paths in `src/buffer/`, `src/heap/`, `src/index/` (add after page modification, before marking dirty or writing out)
 
 **Tests:**
 

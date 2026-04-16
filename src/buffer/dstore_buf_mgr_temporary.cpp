@@ -17,6 +17,7 @@
  * Description: local buffer pool manager for temporary table.
  */
 #include "buffer/dstore_buf_mgr_temporary.h"
+#include "errorcode/dstore_buf_error_code.h"
 #include "errorcode/dstore_framework_error_code.h"
 #include "framework/dstore_instance.h"
 #include "dfx/dstore_page_verify.h"
@@ -30,12 +31,40 @@ namespace {
 
 RetStatus VerifyTmpPageBeforePersist(Page *page)
 {
-    if (page == nullptr || GetDfxVerifyLevel() == VerifyLevel::OFF || !IsPageVerifierRegistered(page->GetType())) {
+    VerifyLevel level = GetDfxVerifyLevel();
+    if (page == nullptr || level == VerifyLevel::NONE || !IsPageVerifierRegistered(page->GetType())) {
         return DSTORE_SUCC;
     }
 
     page->SetChecksum();
-    return VerifyPageInline(page);
+    return VerifyPageOnWrite(page, level);
+}
+
+RetStatus VerifyTmpPageAfterRead(Page *page)
+{
+    VerifyLevel level = GetDfxVerifyLevel();
+    if (page == nullptr || level == VerifyLevel::NONE || !IsPageVerifierRegistered(page->GetType())) {
+        return DSTORE_SUCC;
+    }
+
+    /* Fast path: verify without report allocation */
+    RetStatus ret = VerifyPageOnRead(page, level, nullptr);
+    if (STORAGE_FUNC_SUCC(ret)) {
+        return DSTORE_SUCC;
+    }
+
+    /* Slow path: re-verify with report for diagnostics */
+    VerifyReport report;
+    RetStatus retryRet = VerifyPageOnRead(page, level, &report);
+    if (STORAGE_FUNC_SUCC(retryRet)) {
+        return DSTORE_SUCC;  /* page was concurrently fixed between the two checks */
+    }
+    std::string msg = report.FormatText();
+    ErrLog(DSTORE_ERROR, MODULE_BUFMGR,
+        ErrMsg("[PAGE_VERIFY_FAILED] Tmp page verify failed on read path: pageId=%u.%u, %s",
+            page->GetSelfPageId().m_fileId, page->GetSelfPageId().m_blockId, msg.c_str()));
+    storage_set_error(BUFFER_ERROR_PAGE_VERIFY_FAILED);
+    return ret;
 }
 
 }  // namespace
@@ -345,6 +374,12 @@ READ:
                       bufDesc->GetPage()->GetPlsn(), bufDesc->GetPage()->GetWalId()));
     }
 #endif
+
+    /* 3. DFX page verify on read path: CRC is handled by CheckPageCrcMatch above (PANIC on corruption),
+     * DFX framework supplements with non-CRC checks (boundary, LSN, page-type-specific) and returns ERROR. */
+    if (STORAGE_FUNC_FAIL(VerifyTmpPageAfterRead(page))) {
+        return DSTORE_FAIL;
+    }
 
     return ret;
 }

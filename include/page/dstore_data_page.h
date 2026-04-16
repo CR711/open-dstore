@@ -154,6 +154,11 @@ struct DataPage : public Page {
         return reinterpret_cast<char *>(this) + dataHeader.headerOffset;
     }
 
+    inline const char *GetDataOffset() const
+    {
+        return reinterpret_cast<const char *>(this) + dataHeader.headerOffset;
+    }
+
     /* TODO: rmv the redo paramater, use the table status (replay、normal) judge whether check CsnStatus */
     inline void SetTd(uint8 tdId, Xid xid, UndoRecPtr undoPtr, CommandId commandId)
     {
@@ -216,6 +221,13 @@ struct DataPage : public Page {
         return id;
     }
 
+    inline const ItemId *GetItemIdPtr(OffsetNumber offset) const
+    {
+        uint16 itemOffsetPos = static_cast<uint16>(TdDataSize() + (offset - 1) * static_cast<uint16>(sizeof(ItemId)));
+        StorageAssert(itemOffsetPos < (BLCKSZ - DataHeaderSize()));
+        return reinterpret_cast<const ItemId *>(GetDataOffset() + itemOffsetPos);
+    }
+
     inline char *GetItemIdArrayStartPtr()
     {
         return static_cast<char *>(
@@ -242,6 +254,13 @@ struct DataPage : public Page {
         ItemId* id = GetItemIdPtr(offset);
         StorageAssert(!id->IsNoStorage());
         return static_cast<void *>(PageHeaderPtr() + static_cast<int>(id->GetOffset()));
+    }
+
+    inline const void *GetRowData(OffsetNumber offset) const
+    {
+        const ItemId *id = GetItemIdPtr(offset);
+        StorageAssert(!id->IsNoStorage());
+        return static_cast<const void *>(PageHeaderPtr() + static_cast<int>(id->GetOffset()));
     }
 
     inline void RemoveLastItem()

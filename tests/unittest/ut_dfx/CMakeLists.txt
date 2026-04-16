@@ -4,6 +4,7 @@ set(ut_dfx_compile_options ${PROTECT_OPTIONS} ${CHECK_OPTIONS} ${BIN_SECURE_OPTI
 set(ut_dfx_link_options ${BIN_LINK_OPTIONS})
 set(ut_dfx_macro_options ${MACRO_OPTIONS})
 set(ut_dfx_include_directories
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${PROJECT_SOURCE_DIR}/interface
     ${PROJECT_SOURCE_DIR}/include
     ${PROJECT_SOURCE_DIR}/tests/unittest/include

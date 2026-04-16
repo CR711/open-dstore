@@ -12,7 +12,6 @@ class BufMgrInterface;
 
 struct HeapVerifyOptions {
     SnapshotData *snapshot{nullptr};
-    float sampleRatio{1.0F};
     bool isOnline{true};
     bool checkBigTupleChains{true};
     bool checkFsmConsistency{true};
@@ -46,8 +45,8 @@ private:
     bool ReadChunkTuple(const ItemPointerData &ctid, BufferDesc **bufferDesc, HeapPage **page,
         HeapDiskTuple **tuple, ItemId **itemId) const;
 
-    void ReportResult(VerifySeverity severity, const PageId &pageId, const char *checkName, uint64 expected,
-        uint64 actual, const char *format, ...) __attribute__((format(printf, 7, 8)));
+    void ReportResult(VerifySeverity severity, VerifyCode code, const PageId &pageId, const char *checkName,
+        uint64 expected, uint64 actual, const char *format, ...) __attribute__((format(printf, 8, 9)));
 
     static uint64 ItemPointerToUint64(const ItemPointerData &ctid);
     static uint32 ResolveTupleValueOffset(HeapDiskTuple *tuple);
@@ -59,6 +58,8 @@ private:
 
 RetStatus VerifyHeapSegment(BufMgrInterface *bufMgr, StorageRelation heapRel, const HeapVerifyOptions &options,
     VerifyReport *report);
+RetStatus VerifyHeapSegment(BufMgrInterface *bufMgr, StorageRelation heapRel, const HeapVerifyOptions &options,
+    VerifyContext *context);
 
 }  // namespace DSTORE
 

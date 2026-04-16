@@ -69,10 +69,12 @@ int main(int argc, char *argv[])
             storage.CreateTables(&allocedMaxRelOid);
             storage.LoadData();
             storage.CreateIndexes(&allocedMaxRelOid);
+            storage.PrintIndexBloatStats("After Prepare (data import + index build)");
             break;
 
         case SYSBENCH::CMD_RUN:
             storage.Execute();
+            storage.PrintIndexBloatStats("After Workload");
             break;
 
         case SYSBENCH::CMD_CLEANUP:
@@ -84,7 +86,12 @@ int main(int argc, char *argv[])
             storage.LoadData();
             storage.CreateIndexes(&allocedMaxRelOid);
             storage.Execute();
+            storage.PrintIndexBloatStats("After Workload");
             storage.DropTables();
+            break;
+
+        case SYSBENCH::CMD_STRESS:
+            storage.StressInsert();
             break;
 
         default:

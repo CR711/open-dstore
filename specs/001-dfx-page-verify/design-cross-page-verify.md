@@ -714,7 +714,7 @@ MetadataVerifier 校验项
 namespace DSTORE {
 
 struct TableVerifyOptions {
-    VerifyLevel pageLevel = VerifyLevel::HEAVYWEIGHT;  // 单页面校验级别
+    VerifyLevel pageLevel = VerifyLevel::HEAVY;  // 单页面校验级别
     BtreeVerifyOptions btreeOptions;                    // B-tree 校验选项
     HeapVerifyOptions heapOptions;                      // Heap 数据校验选项
     SegmentVerifyOptions segmentOptions;                // Segment 校验选项
@@ -983,4 +983,4 @@ tests/unittest/ut_dfx/
 **共享基础设施**：
 - `VerifyReport` — 单页面和跨页面校验使用同一个 report 实例
 - `VerifySeverity` — 统一的严重级别枚举
-- `VerifyLevel` 和 `VerifyModule` — 跨页面校验通常在 HEAVYWEIGHT 级别执行，不受 GUC 限制（由调用方显式触发）
+- `VerifyLevel` 和 `VerifyModule` — 跨页面校验通常在 HEAVY 级别执行，不受 GUC 限制（由调用方显式触发）

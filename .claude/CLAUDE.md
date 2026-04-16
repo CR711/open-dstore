@@ -91,6 +91,49 @@ Full style guide: `.claude/docs/coding-style.md`
 - Assertions: `StorageAssert(cond)`
 - Tracing: `storage_trace_entry()` / `storage_trace_exit()`
 
+## Mandatory UT Gates (合入前必须通过)
+
+Any code change touching the following modules **MUST** pass the corresponding DFX page verification unit tests before merging. This is a hard gate — no exceptions.
+
+### DFX Page Verify UT (311 tests, 12 test suites)
+
+```bash
+# In Docker container, after build:
+source buildenv && cd tmp_build && make -j$(nproc) install
+
+# Run all DFX UT (MUST all pass):
+bin/unittest --gtest_filter='UTPageVerifyRegistry*:UTHeapPageVerify*:UTIndexPageVerify*:UTHeapSegmentVerify*:UTVerifyReport*:UTUndoPageVerify*:UTSegmentPageVerify*:UTTbsBtrRecycleVerify*:UTFaultInjectVerify*:UTAttackDefenseVerify*:UTPostRedoVerify*:UTBtreeVerify*'
+```
+
+| Test Suite | File | Coverage |
+|---|---|---|
+| UTPageVerifyRegistry | `tests/unittest/ut_dfx/ut_page_verify_registry.cpp` | Registry, 3 scenarios (Read/Write/Full), GUC, concurrency |
+| UTHeapPageVerify | `tests/unittest/ut_dfx/ut_heap_page_verify.cpp` | Heap page LIGHT/MEDIUM/HEAVY, tuple overlap, TD sanity, micro-benchmark |
+| UTIndexPageVerify | `tests/unittest/ut_dfx/ut_index_page_verify.cpp` | Index page LIGHT/MEDIUM/HEAVY, meta page, sibling, key ordering |
+| UTHeapSegmentVerify | `tests/unittest/ut_dfx/ut_heap_segment_verify.cpp` | Segment-level verify, big tuple chain, cycle detection |
+| UTVerifyReport | `tests/unittest/ut_dfx/ut_verify_report.cpp` | Report formatting, severity tracking, JSON escape |
+| UTUndoPageVerify | `tests/unittest/ut_dfx/ut_undo_page_verify.cpp` | Undo record/txn slot page verification |
+| UTSegmentPageVerify | `tests/unittest/ut_dfx/ut_segment_page_verify.cpp` | Segment meta/extent/bitmap page verification |
+| UTTbsBtrRecycleVerify | `tests/unittest/ut_dfx/ut_tbs_btr_recycle_verify.cpp` | Tablespace and B-tree recycle page verification |
+| UTFaultInjectVerify | `tests/unittest/ut_dfx/ut_fault_inject_verify.cpp` | Fault injection: 17 corruption scenarios |
+| UTAttackDefenseVerify | `tests/unittest/ut_dfx/ut_attack_defense_verify.cpp` | Attack/defense: malicious page construction |
+| UTPostRedoVerify | `tests/unittest/ut_dfx/ut_post_redo_verify.cpp` | Post-redo verification integration |
+| UTBtreeVerify | `tests/unittest/ut_dfx/ut_btree_verify.cpp` | B-tree cross-page structure, sibling links, key ordering, parent-child, Index-Heap consistency |
+
+**Affected paths** (changes to these files require DFX UT to pass):
+- `src/dfx/`, `include/dfx/` — page verify framework
+- `src/heap/*verify*`, `src/index/*verify*`, `src/undo/*verify*` — module verifiers
+- `src/page/*verify*`, `src/tablespace/*verify*` — segment/tablespace verifiers
+- `src/buffer/dstore_buf_mgr*.cpp` — buffer integration (read/write path verify calls)
+- `include/dfx/dstore_verify_report.h` — report infrastructure
+
+### Shared Test Utilities
+
+Test utility header: `tests/unittest/ut_dfx/ut_dfx_test_utils.h`
+- `PageBuffer` — aligned page buffer
+- `ScopedVerifyConfig` — RAII guard for GUC verify level/modules (MUST use instead of manual save/restore)
+- `HasVerifyCode()` — check VerifyCode in report (MUST use instead of manual for-loop)
+
 ## Reference Docs
 
 Detailed references for agent on-demand loading:

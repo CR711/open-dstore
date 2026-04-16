@@ -49,8 +49,8 @@ private:
         const PageId &segmentMetaPageId, SegmentType expectedSegmentType, const char *checkPrefix);
     RetStatus VerifyIndexMetadata(const IndexMetaEntry &indexEntry);
     bool ResolveExpectedSegmentTypes(SegmentType *heapSegmentType, SegmentType *indexSegmentType) const;
-    void ReportResult(VerifySeverity severity, const PageId &pageId, const char *checkName, uint64 expected,
-        uint64 actual, const char *format, ...) __attribute__((format(printf, 7, 8)));
+    void ReportResult(VerifySeverity severity, VerifyCode code, const PageId &pageId, const char *checkName,
+        uint64 expected, uint64 actual, const char *format, ...) __attribute__((format(printf, 8, 9)));
 
     MetadataVerifyPageSource *m_pageSource{nullptr};
     MetadataInputStruct m_input;
@@ -59,6 +59,8 @@ private:
 
 RetStatus VerifyMetadataConsistency(
     BufMgrInterface *bufMgr, const MetadataInputStruct &input, VerifyReport *report);
+RetStatus VerifyMetadataConsistency(
+    BufMgrInterface *bufMgr, const MetadataInputStruct &input, VerifyContext *context);
 
 }  // namespace DSTORE
 

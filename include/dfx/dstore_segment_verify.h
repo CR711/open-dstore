@@ -63,8 +63,8 @@ private:
     RetStatus CountLeafPagesBySiblingTraversal(const PageId &rootPageId, uint32 rootLevel, uint64 *leafCount);
     uint64 CountPhysicalLeafPages(const PageId &segmentMetaPageId, const std::vector<ExtentInfo> &extents);
 
-    void ReportResult(VerifySeverity severity, const PageId &pageId, const char *checkName, uint64 expected,
-        uint64 actual, const char *format, ...) __attribute__((format(printf, 7, 8)));
+    void ReportResult(VerifySeverity severity, VerifyCode code, const PageId &pageId, const char *checkName,
+        uint64 expected, uint64 actual, const char *format, ...) __attribute__((format(printf, 8, 9)));
 
     SegmentVerifyPageSource *m_pageSource{nullptr};
     PageId m_segmentMetaPageId{INVALID_PAGE_ID};
@@ -74,6 +74,8 @@ private:
 
 RetStatus VerifySegment(BufMgrInterface *bufMgr, const PageId &segmentMetaPageId, const SegmentVerifyOptions &options,
     VerifyReport *report);
+RetStatus VerifySegment(BufMgrInterface *bufMgr, const PageId &segmentMetaPageId, const SegmentVerifyOptions &options,
+    VerifyContext *context);
 
 }  // namespace DSTORE
 

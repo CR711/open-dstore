@@ -318,10 +318,12 @@ RetStatus BtreeInsert::FindInsertLoc()
                                     insertPage->GetLinkAndStatus()->TestType(BtrPageType::INTERNAL_PAGE)) <= 0);
 
     uint32 freeSpaceOnPage = insertPage->GetFreeSpaceForInsert();
-    /* Step 2. Prune page if free space is insufficient */
+    /* Step 2. Prune page if free space is insufficient or page has dead tuples and is getting full */
     /* Never prune in-building ccindex */
     bool needPrunePage = (m_indexInfo->btrIdxStatus == BtrCcidxStatus::NOT_CCINDEX);
-    if (needPrunePage && freeSpaceOnPage < m_insertTuple->GetSize() + sizeof(ItemId)) {
+    bool spaceInsufficient = (freeSpaceOnPage < m_insertTuple->GetSize() + sizeof(ItemId));
+    bool proactivePrune = (insertPage->HasPrunableTuple() && freeSpaceOnPage < BLCKSZ / 4);
+    if (needPrunePage && (spaceInsufficient || proactivePrune)) {
         LatencyStat::Timer timer(&BtreePerfUnit::GetInstance().m_btreePagePruneLatency, false);
         timer.Start();
         /* Try prune page to get more space and to avoid splitting */
@@ -436,6 +438,24 @@ RetStatus BtreeInsert::AddTupleToLeaf()
     bool needSplit = (m_needRecordUndo && tdId == INVALID_TD_SLOT) ||
                      insPage->GetFreeSpaceForInsert() < m_insertTuple->GetSize();
     FAULT_INJECTION_ACTION(DstoreIndexFI::FORCE_SPLIT, needSplit = true);
+    if (needSplit && !m_prunedPage &&
+        m_indexInfo->btrIdxStatus == BtrCcidxStatus::NOT_CCINDEX &&
+        insPage->HasPrunableTuple()) {
+        /* Last resort before split: page has dead tuples that weren't cleaned yet (e.g. prune wasn't triggered
+         * in FindInsertLoc because space seemed sufficient, but TD alloc failed). Try prune now. */
+        BtreePagePrune prunePage(m_indexRel, m_indexInfo, m_scanKeyValues.scankeys, m_insertPageBuf);
+        if (STORAGE_FUNC_SUCC(prunePage.Prune()) && prunePage.IsPagePrunable()) {
+            m_prunedPage = true;
+            m_isBoundValid = false;
+            m_insertOff = BinarySearchOnLeaf(insPage);
+            /* Re-evaluate need for split after prune */
+            if (m_needRecordUndo && tdId == INVALID_TD_SLOT) {
+                tdId = AllocAndSetTd(insPage, m_insertTuple);
+            }
+            needSplit = (m_needRecordUndo && tdId == INVALID_TD_SLOT) ||
+                        insPage->GetFreeSpaceForInsert() < m_insertTuple->GetSize();
+        }
+    }
     if (needSplit) {
         InitSplittingTarget(m_insertPageBuf, !m_prunedPage);
         /* Split page and add new indexTuple on either target page or new right page. */

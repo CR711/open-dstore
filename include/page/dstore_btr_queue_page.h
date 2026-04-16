@@ -486,6 +486,13 @@ public:
         return static_cast<T *>(static_cast<void *>(queue));
     }
 
+    template <typename T>
+    inline const T *GetQueue() const
+    {
+        const char *queue = static_cast<const char *>(static_cast<const void *>(this)) + GetDataBeginOffset();
+        return static_cast<const T *>(static_cast<const void *>(queue));
+    }
+
     inline bool IsTail()
     {
         return GetMeta()->IsTail();

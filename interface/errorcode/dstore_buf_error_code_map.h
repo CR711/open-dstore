@@ -115,6 +115,8 @@ static ErrorDetails g_buffer_error_code_map[] = {
         {"TDE_ERROR_ENCRYPT_FAILED", "Tde encrypt failed"},
     [ERROR_GET_CODE(TDE_ERROR_DECRYPT_FAILED)] =
         {"TDE_ERROR_DECRYPT_FAILED", "Tde decrypt failed"},
+    [ERROR_GET_CODE(BUFFER_ERROR_PAGE_VERIFY_FAILED)] =
+        {"BUFFER_ERROR_PAGE_VERIFY_FAILED", "Page verification failed on read path, possible page corruption."},
 };
 
 static_assert(sizeof(g_buffer_error_code_map) != BUFFER_ERROR_MAX, "Error code map size doesn't match");

@@ -168,6 +168,11 @@ struct Page {
         return static_cast<char *>(static_cast<void *>(&m_header));
     }
 
+    inline const char *PageHeaderPtr() const
+    {
+        return reinterpret_cast<const char *>(this);
+    }
+
     inline uint16 GetSpecialOffset() const
     {
         return m_header.m_special.m_offset;

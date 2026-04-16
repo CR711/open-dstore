@@ -57,7 +57,8 @@ enum CommandType : uint8_t {
     CMD_PREPARE = 0,
     CMD_RUN,
     CMD_CLEANUP,
-    CMD_ALL
+    CMD_ALL,
+    CMD_STRESS   /* monotonic insert stress test for index bloat */
 };
 
 enum ModeType : uint8_t {
@@ -88,6 +89,11 @@ struct SysbenchConfig {
     bool        skipTrx           = false;
     bool        secondaryIndex    = false;
     bool        autoInc           = true;
+
+    /* stress mode: monotonic insert beyond tableSize to trigger splits */
+    uint32_t    stressRows        = 100000;  /* new rows to insert beyond tableSize */
+    uint32_t    stressDeletePct   = 0;       /* % of existing rows to delete first */
+    uint32_t    stressBatchSize   = 1000;    /* commit every N rows */
 
     ModeType    mode              = MODE_READ_WRITE;
     CommandType command           = CMD_RUN;

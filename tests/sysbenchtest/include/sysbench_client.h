@@ -55,8 +55,14 @@ public:
     void RecoverTables();
     void Execute();
 
+    /* Stress phase: monotonic inserts to trigger B-tree splits */
+    void StressInsert();
+
     /* Cleanup phase */
     void DropTables();
+
+    /* Index bloat statistics */
+    void PrintIndexBloatStats(const char *phase);
 
     SysbenchConfig GetConfig() const { return m_config; }
 
