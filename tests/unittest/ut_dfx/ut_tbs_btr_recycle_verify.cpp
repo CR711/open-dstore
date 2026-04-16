@@ -71,10 +71,60 @@ TEST(UTTbsBtrRecycleVerify, BitmapAllocatedCountMismatch)
     EXPECT_TRUE(HasVerifyCode(heavyReport, VerifyCode::BITMAP_ALLOCATED_CNT_MISMATCH));
 }
 
-/* ========== TbsBitmapMetaPage — BITMAP_META_EXTENT_SIZE_INVALID ========== */
+/* ========== TbsBitmapMetaPage — BITMAP_META_EXTENT_SIZE_INVALID (parameterized) ==========
+ *
+ * Five independent checks in src/tablespace/dstore_tbs_page_verify.cpp
+ * (lines 119/125/139/145/162/168/174) all report
+ * BITMAP_META_EXTENT_SIZE_INVALID.  Each param row targets a distinct
+ * field corruption; shared setup → TEST_P avoids 5× copy-paste. */
 
-TEST(UTTbsBtrRecycleVerify, BitmapMetaExtentSizeInvalid)
+namespace {
+
+struct BitmapMetaCorruptCase {
+    const char *name;
+    VerifyLevel level;
+    void (*corrupt)(TbsBitmapMetaPage *);
+};
+
+void CorruptExtentSize(TbsBitmapMetaPage *page)
 {
+    page->extentSize = static_cast<ExtentSize>(0xFF);
+}
+
+void CorruptPagesPerGroup(TbsBitmapMetaPage *page)
+{
+    page->bitmapPagesPerGroup = BITMAP_PAGES_PER_GROUP + 1;
+}
+
+void CorruptGroupCountExceedsMax(TbsBitmapMetaPage *page)
+{
+    page->groupCount = MAX_BITMAP_GROUP_CNT + 1;
+    page->validOffset = static_cast<uint16>(OFFSETOF(TbsBitmapMetaPage, bitmapGroups) +
+        page->groupCount * sizeof(TbsBitMapGroup));
+}
+
+void CorruptValidOffset(TbsBitmapMetaPage *page)
+{
+    page->groupCount = 2;
+    page->validOffset = 999;
+    page->idleGroupHints = 0;
+}
+
+void CorruptIdleHintExceedsGroupCount(TbsBitmapMetaPage *page)
+{
+    page->groupCount = 2;
+    page->validOffset = static_cast<uint16>(OFFSETOF(TbsBitmapMetaPage, bitmapGroups) +
+        page->groupCount * sizeof(TbsBitMapGroup));
+    page->idleGroupHints = 5;
+}
+
+}  /* anonymous namespace */
+
+class UTTbsBitmapMetaCorrupt : public ::testing::TestWithParam<BitmapMetaCorruptCase> {};
+
+TEST_P(UTTbsBitmapMetaCorrupt, ReportsBitmapMetaExtentSizeInvalid)
+{
+    const BitmapMetaCorruptCase &c = GetParam();
     RegisterTablespacePageVerifiers();
     ScopedVerifyConfig guard;
     EnableAllModules();
@@ -82,13 +132,23 @@ TEST(UTTbsBtrRecycleVerify, BitmapMetaExtentSizeInvalid)
     TbsBitmapMetaPage *page = reinterpret_cast<TbsBitmapMetaPage *>(buf.data());
     page->InitBitmapMetaPage({50, 101}, 0, EXT_SIZE_8);
     page->SetLsn(1, 1, 1, false);
-    page->extentSize = static_cast<ExtentSize>(0xFF);  /* Invalid extent size */
+    c.corrupt(page);
     page->SetChecksum();
 
     VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
-    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID));
+    EXPECT_EQ(VerifyPage(page, c.level, &report), DSTORE_FAIL) << c.name;
+    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID)) << c.name;
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    BitmapMetaCorruptions, UTTbsBitmapMetaCorrupt,
+    ::testing::Values(
+        BitmapMetaCorruptCase{"extent_size_invalid", VerifyLevel::LIGHT, CorruptExtentSize},
+        BitmapMetaCorruptCase{"pages_per_group_mismatch", VerifyLevel::LIGHT, CorruptPagesPerGroup},
+        BitmapMetaCorruptCase{"group_count_exceeds_max", VerifyLevel::HEAVY, CorruptGroupCountExceedsMax},
+        BitmapMetaCorruptCase{"valid_offset_mismatch", VerifyLevel::HEAVY, CorruptValidOffset},
+        BitmapMetaCorruptCase{"idle_hint_exceeds_group_count", VerifyLevel::HEAVY, CorruptIdleHintExceedsGroupCount}),
+    [](const ::testing::TestParamInfo<BitmapMetaCorruptCase> &info) { return info.param.name; });
 
 /* ========== BtrQueuePage — BTR_QUEUE_INCONSISTENT ========== */
 
@@ -255,90 +315,6 @@ TEST(UTTbsBtrRecycleVerify, BitmapAllocatedCountExceedsCapacity)
     EXPECT_TRUE(HasVerifyCode(report, VerifyCode::BITMAP_ALLOCATED_CNT_MISMATCH));
 }
 
-/* ========== TbsBitmapMetaPage — bitmapPagesPerGroup mismatch (LIGHT) ========== */
-
-TEST(UTTbsBtrRecycleVerify, BitmapMetaPagesPerGroupMismatch)
-{
-    RegisterTablespacePageVerifiers();
-    ScopedVerifyConfig guard;
-    EnableAllModules();
-    PageBuffer buf{};
-    TbsBitmapMetaPage *page = reinterpret_cast<TbsBitmapMetaPage *>(buf.data());
-    page->InitBitmapMetaPage({60, 20}, 0, EXT_SIZE_8);
-    page->SetLsn(1, 1, 1, false);
-    page->bitmapPagesPerGroup = BITMAP_PAGES_PER_GROUP + 1;  /* mismatch */
-    page->SetChecksum();
-
-    VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
-    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID));
-}
-
-/* ========== TbsBitmapMetaPage — groupCount exceeds MAX (HEAVY) ========== */
-
-TEST(UTTbsBtrRecycleVerify, BitmapMetaGroupCountExceedsMax)
-{
-    RegisterTablespacePageVerifiers();
-    ScopedVerifyConfig guard;
-    EnableAllModules();
-    PageBuffer buf{};
-    TbsBitmapMetaPage *page = reinterpret_cast<TbsBitmapMetaPage *>(buf.data());
-    page->InitBitmapMetaPage({60, 21}, 0, EXT_SIZE_8);
-    page->SetLsn(1, 1, 1, false);
-    page->groupCount = MAX_BITMAP_GROUP_CNT + 1;
-    /* Fix validOffset to match groupCount so it doesn't fail first on offset check */
-    page->validOffset = static_cast<uint16>(OFFSETOF(TbsBitmapMetaPage, bitmapGroups) +
-        page->groupCount * sizeof(TbsBitMapGroup));
-    page->SetChecksum();
-
-    VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
-    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID));
-}
-
-/* ========== TbsBitmapMetaPage — validOffset mismatch (HEAVY) ========== */
-
-TEST(UTTbsBtrRecycleVerify, BitmapMetaValidOffsetMismatch)
-{
-    RegisterTablespacePageVerifiers();
-    ScopedVerifyConfig guard;
-    EnableAllModules();
-    PageBuffer buf{};
-    TbsBitmapMetaPage *page = reinterpret_cast<TbsBitmapMetaPage *>(buf.data());
-    page->InitBitmapMetaPage({60, 22}, 0, EXT_SIZE_8);
-    page->SetLsn(1, 1, 1, false);
-    page->groupCount = 2;
-    page->validOffset = 999;  /* does not match expected from groupCount */
-    page->idleGroupHints = 0;
-    page->SetChecksum();
-
-    VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
-    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID));
-}
-
-/* ========== TbsBitmapMetaPage — idleGroupHints exceeds groupCount (HEAVY) ========== */
-
-TEST(UTTbsBtrRecycleVerify, BitmapMetaIdleHintExceedsGroupCount)
-{
-    RegisterTablespacePageVerifiers();
-    ScopedVerifyConfig guard;
-    EnableAllModules();
-    PageBuffer buf{};
-    TbsBitmapMetaPage *page = reinterpret_cast<TbsBitmapMetaPage *>(buf.data());
-    page->InitBitmapMetaPage({60, 23}, 0, EXT_SIZE_8);
-    page->SetLsn(1, 1, 1, false);
-    page->groupCount = 2;
-    page->validOffset = static_cast<uint16>(OFFSETOF(TbsBitmapMetaPage, bitmapGroups) +
-        page->groupCount * sizeof(TbsBitMapGroup));
-    page->idleGroupHints = 5;  /* > groupCount(2) */
-    page->SetChecksum();
-
-    VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
-    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID));
-}
-
 /* ========== TbsFileMetaPage — GLSN == UINT64_MAX (LIGHT) ========== */
 
 TEST(UTTbsBtrRecycleVerify, FileMetaGlsnInvalid)
@@ -401,24 +377,62 @@ TEST(UTTbsBtrRecycleVerify, BtrQueueSpecialOffsetInvalid)
     EXPECT_TRUE(HasVerifyCode(report, VerifyCode::PAGE_BOUNDARY_INVALID));
 }
 
-/* ========== BtrRecyclePartitionMeta — createdXid == INVALID_XID (LIGHT) ========== */
+/* ========== BtrRecycle{Partition,Root}Meta — createdXid == INVALID_XID (parameterized) ==========
+ *
+ * Both Partition and Root meta pages run the same LIGHT check for
+ * INVALID_XID and report PAGE_BOUNDARY_INVALID.  Single setup body,
+ * two param rows for the two page layouts. */
 
-TEST(UTTbsBtrRecycleVerify, BtrRecyclePartitionXidInvalid)
+namespace {
+
+struct RecycleInvalidXidCase {
+    const char *name;
+    void (*initAndCorrupt)(PageBuffer &, PageId);
+};
+
+void InitPartitionInvalidXid(PageBuffer &buf, PageId pid)
 {
+    BtrRecyclePartitionMetaPage *page = reinterpret_cast<BtrRecyclePartitionMetaPage *>(buf.data());
+    page->InitRecyclePartitionMetaPage(pid, Xid(1));
+    page->SetLsn(1, 1, 1, false);
+    page->createdXid = INVALID_XID;
+    page->SetChecksum();
+}
+
+void InitRootInvalidXid(PageBuffer &buf, PageId pid)
+{
+    BtrRecycleRootMetaPage *page = reinterpret_cast<BtrRecycleRootMetaPage *>(buf.data());
+    page->InitRecycleRootMetaPage(pid, Xid(1));
+    page->SetLsn(1, 1, 1, false);
+    page->metaPageHeader.createdXid = INVALID_XID;
+    page->SetChecksum();
+}
+
+}  /* anonymous namespace */
+
+class UTBtrRecycleInvalidXid : public ::testing::TestWithParam<RecycleInvalidXidCase> {};
+
+TEST_P(UTBtrRecycleInvalidXid, ReportsPageBoundaryInvalid)
+{
+    const RecycleInvalidXidCase &c = GetParam();
     RegisterBtrRecyclePageVerifiers();
     ScopedVerifyConfig guard;
     EnableAllModules();
     PageBuffer buf{};
-    BtrRecyclePartitionMetaPage *page = reinterpret_cast<BtrRecyclePartitionMetaPage *>(buf.data());
-    page->InitRecyclePartitionMetaPage({60, 50}, Xid(1));
-    page->SetLsn(1, 1, 1, false);
-    page->createdXid = INVALID_XID;
-    page->SetChecksum();
+    c.initAndCorrupt(buf, {60, 50});
 
     VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
-    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::PAGE_BOUNDARY_INVALID));
+    Page *page = reinterpret_cast<Page *>(buf.data());
+    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL) << c.name;
+    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::PAGE_BOUNDARY_INVALID)) << c.name;
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    InvalidCreatedXid, UTBtrRecycleInvalidXid,
+    ::testing::Values(
+        RecycleInvalidXidCase{"partition_meta", InitPartitionInvalidXid},
+        RecycleInvalidXidCase{"root_meta", InitRootInvalidXid}),
+    [](const ::testing::TestParamInfo<RecycleInvalidXidCase> &info) { return info.param.name; });
 
 /* ========== BtrRecyclePartitionMeta — accessTimestamp == 0 (HEAVY) ========== */
 
@@ -457,25 +471,6 @@ TEST(UTTbsBtrRecycleVerify, BtrRecyclePartitionSelfLink)
     VerifyReport report;
     EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
     EXPECT_TRUE(HasVerifyCode(report, VerifyCode::PAGE_ID_INVALID));
-}
-
-/* ========== BtrRecycleRootMeta — createdXid == INVALID_XID (LIGHT) ========== */
-
-TEST(UTTbsBtrRecycleVerify, BtrRecycleRootXidInvalid)
-{
-    RegisterBtrRecyclePageVerifiers();
-    ScopedVerifyConfig guard;
-    EnableAllModules();
-    PageBuffer buf{};
-    BtrRecycleRootMetaPage *page = reinterpret_cast<BtrRecycleRootMetaPage *>(buf.data());
-    page->InitRecycleRootMetaPage({60, 60}, Xid(1));
-    page->SetLsn(1, 1, 1, false);
-    page->metaPageHeader.createdXid = INVALID_XID;
-    page->SetChecksum();
-
-    VerifyReport report;
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
-    EXPECT_TRUE(HasVerifyCode(report, VerifyCode::PAGE_BOUNDARY_INVALID));
 }
 
 /* ========== BtrRecycleRootMeta — partition entry self-reference (HEAVY) ========== */

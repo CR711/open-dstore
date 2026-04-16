@@ -432,6 +432,22 @@ TEST(UTPageVerifyRegistry, OnWrite_WhenBoundaryInvalid_ShouldPanic)
     ASSERT_DEATH((void)VerifyPageOnWrite(page, VerifyLevel::LIGHT), "");
 }
 
+TEST(UTPageVerifyRegistry, OnWrite_WhenCrcMismatch_ShouldPanic)
+{
+    ScopedVerifyConfig guard;
+
+    PageBuffer pageBuffer{};
+    Page *page = InitPage(pageBuffer, PageType::HEAP_PAGE_TYPE, {205, 305});
+
+    ASSERT_EQ(RegisterPageVerifier(PageType::HEAP_PAGE_TYPE, "HeapPage", VerifyModule::HEAP,
+        VerifyHeapLight, VerifyHeapMedium, VerifyHeapHeavy), DSTORE_SUCC);
+
+    /* 篡改页面内容但不更新 CRC，制造 CRC 校验失败 */
+    page->m_header.m_lower += 8;
+
+    ASSERT_DEATH((void)VerifyPageOnWrite(page, VerifyLevel::LIGHT), "");
+}
+
 TEST(UTPageVerifyRegistry, OnReadForcesLightLevel)
 {
     PageBuffer pageBuffer{};

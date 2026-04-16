@@ -1,4 +1,32 @@
+/*
+ * UT for index page verify (BtrPage).  v2 delta vs v1:
+ *   - Param-merged 3 TEST_P families (-10 TEST_F, +3 TEST_P)
+ *   - Deleted 2 redundant TEST_F (UninitializedPageDetected /
+ *     SingleDataTupleKeyOrderValid — both fully covered by retained cases)
+ *   - Added 3 concurrency TEST (B-link specific: splitStat flip, right
+ *     sibling flip, high-key disjoint control)
+ *   - Switched all local helpers to ut_dfx::MakeValidIndexPage /
+ *     AddIndexTuple; removed anonymous-namespace duplicates
+ *   - All tests use ScopedVerifyConfig RAII and EnableAllModules per
+ *     team-lead red line
+ *
+ * === Removed cases (reasons) ===
+ *   ValidIndexPagePasses / ValidIndexPagePassesMedium /
+ *     MultiTupleHeavyweightValid / MediumLevelValid
+ *     → folded into ValidPagePassesAllLevels (4 rows).
+ *   UninitializedPageDetected → equivalent to MetaPageIdInvalid (same
+ *     corruption, MetaPageIdInvalid holds the stronger code assertion).
+ *   LightDetectsInvalidBtrPageType / LightDetectsOutOfRangeBtrPageType
+ *     → folded into InvalidPageTypeCorruption (2 rows).
+ *   HeavyweightKeyOrderValid / HeavyweightKeyOrderInvalid /
+ *     FiveTupleKeyOrderValid / FiveTupleKeyOrderInvalid_MiddleSwap
+ *     → folded into KeyOrderCorruption (4 rows).
+ *   SingleDataTupleKeyOrderValid → strict subset of FiveTupleKeyOrderValid.
+ */
+#include <atomic>
 #include <cstring>
+#include <thread>
+#include <vector>
 #include <gtest/gtest.h>
 
 #include "dfx/dstore_page_verify.h"
@@ -8,34 +36,22 @@
 
 using namespace DSTORE;
 using DSTORE::ut_dfx::PageBuffer;
+using DSTORE::ut_dfx::MakeValidIndexPage;
+using DSTORE::ut_dfx::AddIndexTuple;
+using DSTORE::ut_dfx::ScopedVerifyConfig;
 
 namespace {
 
-BtrPage *InitIndexPage(PageBuffer &buffer, PageId pageId)
-{
-    BtrPage *page = reinterpret_cast<BtrPage *>(buffer.data());
-    page->InitBtrPageInner(pageId);
-    page->SetLsn(1, 1, 1, false);
-    page->GetLinkAndStatus()->InitPageMeta({1, 1}, 0, false);
-    page->SetBtrMetaCreateXid(Xid(0));
-    page->AllocateTdSpace();
-    page->SetChecksum();
-    return page;
-}
+constexpr int CONCURRENT_WORKERS = 8;
+constexpr int CONCURRENT_LOOPS = 2000;
 
-void AddIndexTuple(BtrPage *page, OffsetNumber offset, uint16 tupleSize, uint8 tdId)
+/* Write `byteVal` into the key payload region of an existing tuple. */
+inline void SetTupleKeyBytes(BtrPage *page, OffsetNumber offset, uint16 tupleSize, unsigned char byteVal)
 {
-    page->SetUpper(static_cast<uint16>(page->GetUpper() - tupleSize));
-    ItemId *itemId = page->GetItemIdPtr(offset);
-    itemId->SetNormal(page->GetUpper(), tupleSize);
-    page->SetLower(static_cast<uint16>(page->GetLower() + sizeof(ItemId)));
-
-    IndexTuple *tuple = page->GetIndexTuple(offset);
-    tuple->SetSize(tupleSize);
-    tuple->SetTdId(tdId);
-    tuple->SetTdStatus(ATTACH_TD_AS_NEW_OWNER);
-    ItemPointerData heapCtid = INVALID_ITEM_POINTER;
-    tuple->SetHeapCtid(&heapCtid);
+    const IndexTuple *tuple = page->GetIndexTuple(offset);
+    char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
+    uint16 keyLen = static_cast<uint16>(tupleSize - INDEX_TUPLE_SIZE);
+    std::memset(keyData, byteVal, keyLen);
 }
 
 class UTIndexPageVerify : public ::testing::Test {
@@ -50,28 +66,170 @@ protected:
 
     BtrPage *InitDefaultPage(const PageId &pageId = {30, 40})
     {
-        return InitIndexPage(pageBuffer, pageId);
+        return MakeValidIndexPage(pageBuffer, pageId);
     }
 };
 
 }  // namespace
 
-TEST_F(UTIndexPageVerify, ValidIndexPagePasses)
-{
-    BtrPage *page = InitDefaultPage({30, 40});
+/* ========== Parameterized valid-page family ========== */
 
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
+struct ValidIndexPageCase {
+    VerifyLevel level;
+    bool multiTuple;  /* if true, add 3 data tuples instead of 1 high-key */
+    const char *label;
+};
+
+class UTIndexPageValid : public ::testing::TestWithParam<ValidIndexPageCase> {
+protected:
+    void SetUp() override
+    {
+        RegisterIndexPageVerifier();
+    }
+    PageBuffer pageBuffer{};
+    VerifyReport report;
+};
+
+TEST_P(UTIndexPageValid, ValidPagePassesAllLevels)
+{
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+
+    const auto &p = GetParam();
+    BtrPage *page = MakeValidIndexPage(pageBuffer, {30, 40});
+
+    if (p.multiTuple) {
+        AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
+        AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, 24, 0);
+        AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, 24, 0);
+    } else {
+        AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
+    }
     page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
     page->SetChecksum();
 
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_SUCC);
+    EXPECT_EQ(VerifyPage(page, p.level, &report), DSTORE_SUCC);
     EXPECT_FALSE(report.HasError());
 }
 
+INSTANTIATE_TEST_SUITE_P(AllLevels, UTIndexPageValid,
+    ::testing::Values(
+        ValidIndexPageCase{VerifyLevel::LIGHT, false, "light_singletuple"},
+        ValidIndexPageCase{VerifyLevel::MEDIUM, false, "medium_singletuple"},
+        ValidIndexPageCase{VerifyLevel::HEAVY, false, "heavy_singletuple"},
+        ValidIndexPageCase{VerifyLevel::HEAVY, true, "heavy_multituple"}),
+    [](const ::testing::TestParamInfo<ValidIndexPageCase> &info) {
+        return info.param.label;
+    });
+
+/* ========== Parameterized invalid btree page type family ========== */
+
+struct InvalidPageTypeCase {
+    uint16 rawType;  /* raw bit-pattern to write into status.bitVal.type */
+    const char *label;
+};
+
+class UTIndexPageTypeCorruption : public ::testing::TestWithParam<InvalidPageTypeCase> {
+protected:
+    void SetUp() override
+    {
+        RegisterIndexPageVerifier();
+    }
+    PageBuffer pageBuffer{};
+    VerifyReport report;
+};
+
+TEST_P(UTIndexPageTypeCorruption, InvalidPageTypeDetected)
+{
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+
+    const auto &p = GetParam();
+    BtrPage *page = MakeValidIndexPage(pageBuffer, {50, 60});
+    page->GetLinkAndStatus()->status.bitVal.type = p.rawType;
+    page->SetChecksum();
+
+    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
+    EXPECT_TRUE(report.HasError());
+    EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::BTR_PAGE_TYPE_INVALID))
+        << "Expected BTR_PAGE_TYPE_INVALID for raw type " << p.rawType;
+}
+
+INSTANTIATE_TEST_SUITE_P(Types, UTIndexPageTypeCorruption,
+    ::testing::Values(
+        /* 0 = INVALID_BTR_PAGE (explicit invalid sentinel) */
+        InvalidPageTypeCase{static_cast<uint16>(BtrPageType::INVALID_BTR_PAGE), "invalid_sentinel"},
+        /* META_PAGE(3)+1 = 4 wraps to 0 in 2-bit field — same invalid */
+        InvalidPageTypeCase{static_cast<uint16>(static_cast<uint16>(BtrPageType::META_PAGE) + 1), "wraparound"}),
+    [](const ::testing::TestParamInfo<InvalidPageTypeCase> &info) {
+        return info.param.label;
+    });
+
+/* ========== Parameterized key-ordering family ========== */
+
+struct KeyOrderCase {
+    int dataTupleCount;         /* 2 or 5 data tuples after hikey */
+    std::array<unsigned char, 5> keyBytes;  /* key bytes per data tuple (index 0..count-1) */
+    RetStatus expectedStatus;
+    bool expectError;
+    const char *label;
+};
+
+class UTIndexPageKeyOrder : public ::testing::TestWithParam<KeyOrderCase> {
+protected:
+    void SetUp() override
+    {
+        RegisterIndexPageVerifier();
+    }
+    PageBuffer pageBuffer{};
+    VerifyReport report;
+};
+
+TEST_P(UTIndexPageKeyOrder, KeyOrderCorruption)
+{
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+
+    const auto &p = GetParam();
+    const uint16 tupleSize = 32;  /* INDEX_TUPLE_SIZE(16) + 16 key bytes */
+    BtrPage *page = MakeValidIndexPage(pageBuffer, {55, 65});
+
+    AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);  /* hikey */
+    for (int i = 0; i < p.dataTupleCount; ++i) {
+        OffsetNumber off = static_cast<OffsetNumber>(BTREE_PAGE_HIKEY + 1 + i);
+        AddIndexTuple(page, off, tupleSize, 0);
+        SetTupleKeyBytes(page, off, tupleSize, p.keyBytes[i]);
+    }
+
+    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
+    page->SetChecksum();
+
+    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), p.expectedStatus);
+    EXPECT_EQ(report.HasError(), p.expectError);
+}
+
+INSTANTIATE_TEST_SUITE_P(Orderings, UTIndexPageKeyOrder,
+    ::testing::Values(
+        /* 2-tuple ascending: 0x10 < 0x20 */
+        KeyOrderCase{2, {0x10, 0x20, 0, 0, 0}, DSTORE_SUCC, false, "two_ascending"},
+        /* 2-tuple descending (invalid): 0x30 > 0x10 */
+        KeyOrderCase{2, {0x30, 0x10, 0, 0, 0}, DSTORE_FAIL, true, "two_descending_invalid"},
+        /* 5-tuple strict ascending */
+        KeyOrderCase{5, {0x10, 0x20, 0x30, 0x40, 0x50}, DSTORE_SUCC, false, "five_ascending"},
+        /* 5-tuple with middle swap (tuple 3 & 4 swapped): 0x10,0x20,0x40,0x30,0x50 */
+        KeyOrderCase{5, {0x10, 0x20, 0x40, 0x30, 0x50}, DSTORE_FAIL, true, "five_middle_swap_invalid"}),
+    [](const ::testing::TestParamInfo<KeyOrderCase> &info) {
+        return info.param.label;
+    });
+
+/* ========== Remaining single-shot TEST_F (each exercises a distinct field) ========== */
+
 TEST_F(UTIndexPageVerify, InvalidSpecialOffsetFails)
 {
-    BtrPage *page = InitDefaultPage({31, 41});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
+    BtrPage *page = InitDefaultPage({31, 41});
     page->SetSpecialOffset(static_cast<uint16>(page->GetSpecialOffset() - 8));
     page->SetChecksum();
 
@@ -81,8 +239,10 @@ TEST_F(UTIndexPageVerify, InvalidSpecialOffsetFails)
 
 TEST_F(UTIndexPageVerify, MissingHighKeyFails)
 {
-    BtrPage *page = InitDefaultPage({32, 42});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
+    BtrPage *page = InitDefaultPage({32, 42});
     page->GetLinkAndStatus()->SetRight({2, 2});
     page->SetChecksum();
 
@@ -90,52 +250,26 @@ TEST_F(UTIndexPageVerify, MissingHighKeyFails)
     EXPECT_TRUE(report.HasError());
 }
 
-TEST_F(UTIndexPageVerify, ValidIndexPagePassesMedium)
-{
-    BtrPage *page = InitDefaultPage({33, 43});
-
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::MEDIUM, &report), DSTORE_SUCC);
-    EXPECT_FALSE(report.HasError());
-}
-
-TEST_F(UTIndexPageVerify, MultiTupleHeavyweightValid)
-{
-    BtrPage *page = InitDefaultPage({34, 44});
-
-    /* high key + 2 data tuples */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, 24, 0);
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, 24, 0);
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_SUCC);
-    EXPECT_FALSE(report.HasError());
-}
-
 TEST_F(UTIndexPageVerify, MetaPageTdCountNonZeroFails)
 {
-    BtrPage *page = InitDefaultPage({35, 45});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* 标记为 META_PAGE 类型 */
+    BtrPage *page = InitDefaultPage({35, 45});
     page->GetLinkAndStatus()->SetType(BtrPageType::META_PAGE);
     page->SetChecksum();
 
-    /* meta page 不应有 TD slots，但 InitIndexPage 已分配了 TD space */
     EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
     EXPECT_TRUE(report.HasError());
 }
 
 TEST_F(UTIndexPageVerify, TdIdExceedsTdCount)
 {
-    BtrPage *page = InitDefaultPage({36, 46});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
+    BtrPage *page = InitDefaultPage({36, 46});
     uint8 tdCount = page->GetTdCount();
-    /* 插入 tuple 时 tdId 设为 tdCount，越界 */
     AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, tdCount);
     page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
     page->SetChecksum();
@@ -146,13 +280,14 @@ TEST_F(UTIndexPageVerify, TdIdExceedsTdCount)
 
 TEST_F(UTIndexPageVerify, TupleOverlapDetected)
 {
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+
     BtrPage *page = InitDefaultPage({37, 47});
 
-    /* 先插入一个合法 tuple */
     AddIndexTuple(page, BTREE_PAGE_HIKEY, 48, 0);
-    /* 手动构造第二个 tuple 使其与第一个重叠 */
     ItemId *itemId2 = page->GetItemIdPtr(BTREE_PAGE_HIKEY + 1);
-    uint16 overlapOffset = page->GetUpper() + 24;
+    uint16 overlapOffset = static_cast<uint16>(page->GetUpper() + 24);
     itemId2->SetNormal(overlapOffset, 24);
     page->SetLower(static_cast<uint16>(page->GetLower() + sizeof(ItemId)));
 
@@ -173,11 +308,10 @@ TEST_F(UTIndexPageVerify, TupleOverlapDetected)
 
 TEST_F(UTIndexPageVerify, DamagedPageFails)
 {
-    BtrPage *page = InitDefaultPage({38, 48});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* IsDamaged() returns true when lower == 0.
-     * lower=0 causes lower > upper to NOT trigger (0 < upper is fine),
-     * but the index lightweight verifier catches IsDamaged(). */
+    BtrPage *page = InitDefaultPage({38, 48});
     page->SetLower(0);
     page->SetChecksum();
 
@@ -185,29 +319,16 @@ TEST_F(UTIndexPageVerify, DamagedPageFails)
     EXPECT_TRUE(report.HasError());
 }
 
-/* ========== 未初始化页面检测测试 ========== */
-
-TEST_F(UTIndexPageVerify, UninitializedPageDetected)
-{
-    BtrPage *page = InitDefaultPage({39, 49});
-
-    /* Invalidate btrMetaPageId so IsInitialized() returns false */
-    page->GetLinkAndStatus()->btrMetaPageId = INVALID_PAGE_ID;
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
-    EXPECT_TRUE(report.HasError());
-    EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::PAGE_BOUNDARY_INVALID));
-}
-
-/* ========== MetaPageId 无效测试 ========== */
-
 TEST_F(UTIndexPageVerify, MetaPageIdInvalid)
 {
-    BtrPage *page = InitDefaultPage({40, 50});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Invalidate btrMetaPageId; this also makes IsInitialized() false,
-     * but the verifier additionally checks BTR_META_PAGE_ID_INVALID */
+    BtrPage *page = InitDefaultPage({40, 50});
+    /* Invalidating btrMetaPageId also makes IsInitialized() false — the
+     * verifier additionally reports BTR_META_PAGE_ID_INVALID, which is
+     * the strictly stronger assertion compared to the deleted
+     * UninitializedPageDetected (which only asserted PAGE_BOUNDARY_INVALID). */
     page->GetLinkAndStatus()->btrMetaPageId = INVALID_PAGE_ID;
     page->SetChecksum();
 
@@ -216,18 +337,16 @@ TEST_F(UTIndexPageVerify, MetaPageIdInvalid)
     EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::BTR_META_PAGE_ID_INVALID));
 }
 
-/* ========== 活跃区域内 Unused ItemId 测试 ========== */
-
 TEST_F(UTIndexPageVerify, UnusedDataItemInActiveRegion)
 {
-    BtrPage *page = InitDefaultPage({41, 51});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Add hikey + 2 data tuples */
+    BtrPage *page = InitDefaultPage({41, 51});
     AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
     AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, 24, 0);
     AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, 24, 0);
     page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    /* Set the 3rd data tuple's ItemId to unused */
     ItemId *itemId3 = page->GetItemIdPtr(BTREE_PAGE_HIKEY + 2);
     itemId3->SetUnused();
     page->SetChecksum();
@@ -236,17 +355,16 @@ TEST_F(UTIndexPageVerify, UnusedDataItemInActiveRegion)
     EXPECT_TRUE(report.HasError());
 }
 
-/* ========== ItemId 长度与 Tuple 大小不匹配测试 ========== */
-
 TEST_F(UTIndexPageVerify, ItemSizeMismatch)
 {
-    BtrPage *page = InitDefaultPage({42, 52});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
+    BtrPage *page = InitDefaultPage({42, 52});
     AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
     page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    /* Manually reduce ItemId len to be smaller than tuple size */
     ItemId *itemId = page->GetItemIdPtr(BTREE_PAGE_HIKEY);
-    itemId->SetNormal(itemId->GetOffset(), 8); /* len=8 but tuple->GetSize()=24 */
+    itemId->SetNormal(itemId->GetOffset(), 8);  /* len=8 but tuple size=24 */
     page->SetChecksum();
 
     EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
@@ -254,25 +372,12 @@ TEST_F(UTIndexPageVerify, ItemSizeMismatch)
     EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::INDEX_TUPLE_SIZE_MISMATCH));
 }
 
-/* ========== MEDIUM 校验器测试 ========== */
-
-TEST_F(UTIndexPageVerify, MediumLevelValid)
-{
-    BtrPage *page = InitDefaultPage({43, 53});
-
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::MEDIUM, &report), DSTORE_SUCC);
-    EXPECT_FALSE(report.HasError());
-}
-
 TEST_F(UTIndexPageVerify, MediumDetectsLeafLevelNonZero)
 {
-    BtrPage *page = InitDefaultPage({44, 54});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Default type is LEAF_PAGE from InitIndexPage. Set level > 0 */
+    BtrPage *page = InitDefaultPage({44, 54});
     page->GetLinkAndStatus()->SetLevel(3);
     page->SetChecksum();
 
@@ -282,9 +387,10 @@ TEST_F(UTIndexPageVerify, MediumDetectsLeafLevelNonZero)
 
 TEST_F(UTIndexPageVerify, MediumDetectsRightSibSelfReference)
 {
-    BtrPage *page = InitDefaultPage({45, 55});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Set right sibling to point to self */
+    BtrPage *page = InitDefaultPage({45, 55});
     page->GetLinkAndStatus()->SetRight(page->GetSelfPageId());
     page->SetChecksum();
 
@@ -295,9 +401,10 @@ TEST_F(UTIndexPageVerify, MediumDetectsRightSibSelfReference)
 
 TEST_F(UTIndexPageVerify, MediumDetectsLeftSibSelfReference)
 {
-    BtrPage *page = InitDefaultPage({46, 56});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Set left sibling to point to self */
+    BtrPage *page = InitDefaultPage({46, 56});
     page->GetLinkAndStatus()->SetLeft(page->GetSelfPageId());
     page->SetChecksum();
 
@@ -308,9 +415,10 @@ TEST_F(UTIndexPageVerify, MediumDetectsLeftSibSelfReference)
 
 TEST_F(UTIndexPageVerify, MediumDetectsInternalPageLevelZero)
 {
-    BtrPage *page = InitDefaultPage({47, 57});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Set type to INTERNAL_PAGE but keep level at 0 */
+    BtrPage *page = InitDefaultPage({47, 57});
     page->GetLinkAndStatus()->SetType(BtrPageType::INTERNAL_PAGE);
     page->SetChecksum();
 
@@ -320,11 +428,12 @@ TEST_F(UTIndexPageVerify, MediumDetectsInternalPageLevelZero)
 
 TEST_F(UTIndexPageVerify, MediumDetectsItemOutOfBounds)
 {
-    BtrPage *page = InitDefaultPage({48, 58});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
+    BtrPage *page = InitDefaultPage({48, 58});
     AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
     page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    /* Move ItemId offset below upper boundary */
     ItemId *itemId = page->GetItemIdPtr(BTREE_PAGE_HIKEY);
     itemId->SetNormal(0, 24);
     page->SetChecksum();
@@ -333,350 +442,281 @@ TEST_F(UTIndexPageVerify, MediumDetectsItemOutOfBounds)
     EXPECT_TRUE(report.HasError());
 }
 
-/* ========== splitStat / liveStat 枚举范围校验测试 ========== */
-
 TEST_F(UTIndexPageVerify, LightPassesMaxValidLiveStat)
 {
-    BtrPage *page = InitDefaultPage({49, 59});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Set liveStat to the maximum valid enum value.
-     * liveStat is a 2-bit field (max representable = 3 = EMPTY_NO_PARENT_HAS_SIB),
-     * so all 2-bit values (0-3) are in the valid enum range.
-     * This test verifies that the boundary value passes. */
-    BtrPageLinkAndStatus *link = page->GetLinkAndStatus();
-    link->SetLiveStatus(BtrPageLiveStatus::EMPTY_NO_PARENT_HAS_SIB);
+    BtrPage *page = InitDefaultPage({49, 59});
+    page->GetLinkAndStatus()->SetLiveStatus(BtrPageLiveStatus::EMPTY_NO_PARENT_HAS_SIB);
     page->SetChecksum();
 
     EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_SUCC);
     EXPECT_FALSE(report.HasError());
 }
 
-/* ========== BTR_PAGE_TYPE_INVALID UT-only 断言测试 ========== */
-
-TEST_F(UTIndexPageVerify, LightDetectsInvalidBtrPageType)
-{
-    BtrPage *page = InitDefaultPage({50, 60});
-
-    /* Set btree page type to INVALID_BTR_PAGE (0) which is out of valid range */
-    page->GetLinkAndStatus()->SetType(BtrPageType::INVALID_BTR_PAGE);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
-    EXPECT_TRUE(report.HasError());
-    EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::BTR_PAGE_TYPE_INVALID))
-        << "Expected BTR_PAGE_TYPE_INVALID error code for INVALID_BTR_PAGE type";
-}
-
-TEST_F(UTIndexPageVerify, LightDetectsOutOfRangeBtrPageType)
-{
-    BtrPage *page = InitDefaultPage({51, 61});
-
-    /* type is a 2-bit field: META_PAGE(3)+1 = 4 wraps to 0 = INVALID_BTR_PAGE.
-     * This test verifies that corrupted bit patterns that wrap around are
-     * still caught by IsValidBtrPageType(). */
-    BtrPageLinkAndStatus *link = page->GetLinkAndStatus();
-    link->status.bitVal.type = static_cast<uint16>(BtrPageType::META_PAGE) + 1;
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
-    EXPECT_TRUE(report.HasError());
-    EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::BTR_PAGE_TYPE_INVALID))
-        << "Expected BTR_PAGE_TYPE_INVALID error code for out-of-range type";
-}
-
-/* ========== BTR_SPLIT_STAT_INVALID 校验测试 ========== */
-
 TEST_F(UTIndexPageVerify, LightDetectsInvalidSplitStat)
 {
-    BtrPage *page = InitDefaultPage({52, 62});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* splitStat is a 2-bit field; valid values are SPLIT_COMPLETE(0) and
-     * SPLIT_INCOMPLETE(1). Set splitStat=2 which is out of range.
-     * IsSplitComplete() returns false when splitStat != 0, so the guard
-     * condition !IsSplitComplete() is satisfied. */
-    BtrPageLinkAndStatus *link = page->GetLinkAndStatus();
-    link->status.bitVal.splitStat = 2;
+    BtrPage *page = InitDefaultPage({52, 62});
+    page->GetLinkAndStatus()->status.bitVal.splitStat = 2;  /* out of {0,1} */
     page->SetChecksum();
 
     EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_FAIL);
     EXPECT_TRUE(report.HasError());
-    EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::BTR_SPLIT_STAT_INVALID))
-        << "Expected BTR_SPLIT_STAT_INVALID for out-of-range splitStat=2";
+    EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::BTR_SPLIT_STAT_INVALID));
 }
 
 TEST_F(UTIndexPageVerify, LightPassesValidSplitIncomplete)
 {
-    BtrPage *page = InitDefaultPage({53, 63});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* SPLIT_INCOMPLETE(1) is the maximum valid splitStat value.
-     * The page should pass lightweight verification. */
-    BtrPageLinkAndStatus *link = page->GetLinkAndStatus();
-    link->SetSplitStatus(BtrPageSplitStatus::SPLIT_INCOMPLETE);
+    BtrPage *page = InitDefaultPage({53, 63});
+    page->GetLinkAndStatus()->SetSplitStatus(BtrPageSplitStatus::SPLIT_INCOMPLETE);
     page->SetChecksum();
 
     EXPECT_EQ(VerifyPage(page, VerifyLevel::LIGHT, &report), DSTORE_SUCC);
     EXPECT_FALSE(report.HasError());
 }
 
-/* ========== Intra-page key ordering tests (HEAVY) ========== */
-
-TEST_F(UTIndexPageVerify, HeavyweightKeyOrderValid)
-{
-    BtrPage *page = InitDefaultPage({54, 64});
-
-    uint16 tupleSize = 32; /* INDEX_TUPLE_SIZE(16) + 16 bytes key data */
-    /* high key */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);
-    /* data tuple 1: key bytes = 0x10 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 1);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x10, keyLen);
-    }
-    /* data tuple 2: key bytes = 0x20 (ascending order) */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 2);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x20, keyLen);
-    }
-
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_SUCC);
-    EXPECT_FALSE(report.HasError());
-}
-
-TEST_F(UTIndexPageVerify, HeavyweightKeyOrderInvalid)
-{
-    BtrPage *page = InitDefaultPage({55, 65});
-
-    uint16 tupleSize = 32; /* INDEX_TUPLE_SIZE(16) + 16 bytes key data */
-    /* high key */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);
-    /* data tuple 1: key bytes = 0x30 (higher value) */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 1);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x30, keyLen);
-    }
-    /* data tuple 2: key bytes = 0x10 (lower value — out of order) */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 2);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x10, keyLen);
-    }
-
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
-    EXPECT_TRUE(report.HasError());
-}
-
-/* ========== 5+ tuple key ordering tests (HEAVY level) ========== */
-
-TEST_F(UTIndexPageVerify, FiveTupleKeyOrderValid)
-{
-    BtrPage *page = InitDefaultPage({56, 66});
-
-    uint16 tupleSize = 32; /* INDEX_TUPLE_SIZE(16) + 16 bytes key data */
-    /* high key */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);
-    /* data tuple 1: key = 0x10 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 1);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x10, keyLen);
-    }
-    /* data tuple 2: key = 0x20 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 2);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x20, keyLen);
-    }
-    /* data tuple 3: key = 0x30 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 3, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 3);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x30, keyLen);
-    }
-    /* data tuple 4: key = 0x40 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 4, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 4);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x40, keyLen);
-    }
-    /* data tuple 5: key = 0x50 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 5, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 5);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x50, keyLen);
-    }
-
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_SUCC);
-    EXPECT_FALSE(report.HasError());
-}
-
-TEST_F(UTIndexPageVerify, FiveTupleKeyOrderInvalid_MiddleSwap)
-{
-    BtrPage *page = InitDefaultPage({57, 67});
-
-    uint16 tupleSize = 32; /* INDEX_TUPLE_SIZE(16) + 16 bytes key data */
-    /* high key */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);
-    /* data tuple 1: key = 0x10 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 1);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x10, keyLen);
-    }
-    /* data tuple 2: key = 0x20 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 2);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x20, keyLen);
-    }
-    /* data tuple 3: key = 0x40 (swapped with tuple 4) */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 3, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 3);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x40, keyLen);
-    }
-    /* data tuple 4: key = 0x30 (swapped with tuple 3 — out of order) */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 4, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 4);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x30, keyLen);
-    }
-    /* data tuple 5: key = 0x50 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 5, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 5);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x50, keyLen);
-    }
-
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_FAIL);
-    EXPECT_TRUE(report.HasError());
-}
-
 TEST_F(UTIndexPageVerify, DuplicateKeysAllowed)
 {
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+
+    const uint16 tupleSize = 32;
     BtrPage *page = InitDefaultPage({58, 68});
 
-    uint16 tupleSize = 32; /* INDEX_TUPLE_SIZE(16) + 16 bytes key data */
-    /* high key */
     AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);
-    /* data tuple 1: key = 0x20 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 1);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x20, keyLen);
+    for (int i = 0; i < 3; ++i) {
+        OffsetNumber off = static_cast<OffsetNumber>(BTREE_PAGE_HIKEY + 1 + i);
+        AddIndexTuple(page, off, tupleSize, 0);
+        SetTupleKeyBytes(page, off, tupleSize, 0x20);  /* all duplicates */
     }
-    /* data tuple 2: key = 0x20 (duplicate) */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 2, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 2);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x20, keyLen);
-    }
-    /* data tuple 3: key = 0x20 (duplicate) */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 3, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 3);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x20, keyLen);
-    }
-
     page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
     page->SetChecksum();
 
     EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_SUCC);
     EXPECT_FALSE(report.HasError());
 }
-
-TEST_F(UTIndexPageVerify, SingleDataTupleKeyOrderValid)
-{
-    BtrPage *page = InitDefaultPage({59, 69});
-
-    uint16 tupleSize = 32; /* INDEX_TUPLE_SIZE(16) + 16 bytes key data */
-    /* high key */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);
-    /* single data tuple: key = 0x42 */
-    AddIndexTuple(page, BTREE_PAGE_HIKEY + 1, tupleSize, 0);
-    {
-        const IndexTuple *tuple = page->GetIndexTuple(BTREE_PAGE_HIKEY + 1);
-        char *keyData = reinterpret_cast<char *>(const_cast<IndexTuple *>(tuple)) + INDEX_TUPLE_SIZE;
-        uint16 keyLen = tupleSize - INDEX_TUPLE_SIZE;
-        memset(keyData, 0x42, keyLen);
-    }
-
-    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
-    page->SetChecksum();
-
-    EXPECT_EQ(VerifyPage(page, VerifyLevel::HEAVY, &report), DSTORE_SUCC);
-    EXPECT_FALSE(report.HasError());
-}
-
-/* ========== Alignment violation test (MEDIUM level) ========== */
 
 TEST_F(UTIndexPageVerify, ItemIdOffsetMisaligned)
 {
-    BtrPage *page = InitDefaultPage({60, 70});
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
 
-    /* Add two tuples so the first tuple's offset is well above GetUpper() */
+    BtrPage *page = InitDefaultPage({60, 70});
     AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
     AddIndexTuple(page, BTREE_PAGE_FIRSTKEY, 24, 0);
     page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
 
-    /* Corrupt the FIRST tuple's ItemId offset to an odd (non-MAXALIGN'd) value.
-     * Since this tuple was added first, its offset is higher in the page
-     * (further from GetUpper()), so subtracting 1 keeps it within bounds. */
     ItemId *itemId = page->GetItemIdPtr(BTREE_PAGE_HIKEY);
     uint16 originalOffset = itemId->GetOffset();
-    uint16 misaligned = originalOffset - 1;  /* guaranteed misaligned: 8-byte aligned - 1 = odd */
+    uint16 misaligned = static_cast<uint16>(originalOffset - 1);
     itemId->SetNormal(misaligned, 24);
     page->SetChecksum();
 
     EXPECT_EQ(VerifyPage(page, VerifyLevel::MEDIUM, &report), DSTORE_FAIL);
     EXPECT_TRUE(report.HasError());
     EXPECT_TRUE(DSTORE::ut_dfx::HasVerifyCode(report, VerifyCode::INDEX_ITEMID_OFFSET_MISALIGNED));
+}
+
+/* ========== Concurrency tests (B-link specific) ==========
+ *
+ * Model: 1 writer worker (w==0) flips a single field on a shared valid
+ * page; 7 readers run verifier in parallel.  Contract: verifier must
+ * report ONLY the expected bounded set of codes (stable state or the
+ * known transition code), never FATAL, never unrelated codes.
+ *
+ * Torn-read guardrail (team-lead 2026-04-15): readers track
+ * `forbiddenCount` for codes outside the expected set — if the verifier
+ * implementation regresses (e.g. starts re-computing CRC when it
+ * shouldn't), these UTs catch it.
+ *
+ * Shared-slot Y scheme rationale: single-byte plain stores are
+ * hardware-atomic on x86 and aarch64; torn-read tolerance is the
+ * contract under test, so we intentionally allow the benign race
+ * rather than introducing atomic_ref (C++20) or CAS (noise).
+ *
+ * No independent mutator/stopper thread exists in these TESTs — writer
+ * and readers run a fixed CONCURRENT_LOOPS, so new C2 ordering rule
+ * (verifiers.join → stopMutator.store → mutator.join) does not apply.
+ */
+
+TEST(UTIndexPageVerifyConcurrency, Concurrent_SplitIncompleteFlip_ReportsBoundedCodes)
+{
+    /* Single writer flips splitStat between SPLIT_COMPLETE(0) and
+     * SPLIT_INCOMPLETE(1); 7 readers run LIGHT verify.  Both values are
+     * individually valid, so every read must return OK. */
+    RegisterIndexPageVerifier();
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+    SetDfxVerifyLevel(VerifyLevel::LIGHT);
+
+    PageBuffer buf{};
+    BtrPage *page = MakeValidIndexPage(buf, {200, 201});
+    AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
+    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
+    page->SetChecksum();
+    BtrPageLinkAndStatus *link = page->GetLinkAndStatus();
+
+    std::atomic<int> ready{0};
+    std::atomic<uint64> okCount{0};
+    std::atomic<uint64> forbiddenCount{0};
+    std::atomic<uint64> fatalCount{0};
+
+    std::vector<std::thread> workers;
+    for (int w = 0; w < CONCURRENT_WORKERS; ++w) {
+        workers.emplace_back([&, w]() {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) < CONCURRENT_WORKERS) {
+                std::this_thread::yield();
+            }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+
+            if (w == 0) {
+                for (int i = 0; i < CONCURRENT_LOOPS; ++i) {
+                    link->SetSplitStatus((i & 1) ? BtrPageSplitStatus::SPLIT_INCOMPLETE
+                                                 : BtrPageSplitStatus::SPLIT_COMPLETE);
+                }
+            } else {
+                for (int i = 0; i < CONCURRENT_LOOPS; ++i) {
+                    VerifyReport r;
+                    (void)VerifyPage(page, VerifyLevel::LIGHT, &r);
+                    if (!r.HasError()) {
+                        okCount.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        forbiddenCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    if (r.HasFatal()) {
+                        fatalCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            }
+        });
+    }
+    for (auto &t : workers) t.join();
+
+    EXPECT_EQ(forbiddenCount.load(), 0u)
+        << "verifier flagged valid splitStat transitions as errors";
+    EXPECT_EQ(fatalCount.load(), 0u) << "verifier escalated to FATAL during splitStat race";
+    EXPECT_GT(okCount.load(), 0u) << "no readers observed anything — barrier may be broken";
+}
+
+TEST(UTIndexPageVerifyConcurrency, Concurrent_RightSiblingFlip_NoFatal)
+{
+    /* Writer alternates right-sibling between INVALID_PAGE_ID (valid:
+     * rightmost page) and self-PageId (invalid: PAGE_ID_INVALID).
+     * Readers run MEDIUM verify, which checks sibling self-reference.
+     * Expected bounded set: { OK, PAGE_ID_INVALID }. */
+    RegisterIndexPageVerifier();
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+    SetDfxVerifyLevel(VerifyLevel::MEDIUM);
+
+    PageBuffer buf{};
+    BtrPage *page = MakeValidIndexPage(buf, {202, 203});
+    AddIndexTuple(page, BTREE_PAGE_HIKEY, 24, 0);
+    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
+    page->SetChecksum();
+    BtrPageLinkAndStatus *link = page->GetLinkAndStatus();
+    const PageId selfId = page->GetSelfPageId();
+
+    std::atomic<int> ready{0};
+    std::atomic<uint64> okCount{0};
+    std::atomic<uint64> pageIdInvalidCount{0};
+    std::atomic<uint64> forbiddenCount{0};
+    std::atomic<uint64> fatalCount{0};
+
+    std::vector<std::thread> workers;
+    for (int w = 0; w < CONCURRENT_WORKERS; ++w) {
+        workers.emplace_back([&, w]() {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) < CONCURRENT_WORKERS) {
+                std::this_thread::yield();
+            }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+
+            if (w == 0) {
+                for (int i = 0; i < CONCURRENT_LOOPS; ++i) {
+                    link->SetRight((i & 1) ? selfId : INVALID_PAGE_ID);
+                }
+            } else {
+                for (int i = 0; i < CONCURRENT_LOOPS; ++i) {
+                    VerifyReport r;
+                    (void)VerifyPage(page, VerifyLevel::MEDIUM, &r);
+                    if (!r.HasError()) {
+                        okCount.fetch_add(1, std::memory_order_relaxed);
+                    } else if (DSTORE::ut_dfx::HasVerifyCode(r, VerifyCode::PAGE_ID_INVALID)) {
+                        pageIdInvalidCount.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        forbiddenCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    if (r.HasFatal()) {
+                        fatalCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            }
+        });
+    }
+    for (auto &t : workers) t.join();
+
+    EXPECT_EQ(forbiddenCount.load(), 0u)
+        << "verifier reported unrelated codes during right-sibling race";
+    EXPECT_EQ(fatalCount.load(), 0u) << "verifier escalated to FATAL during sibling race";
+    EXPECT_GT(okCount.load() + pageIdInvalidCount.load(), 0u)
+        << "no readers observed anything — barrier may be broken";
+}
+
+TEST(UTIndexPageVerifyConcurrency, Concurrent_HighKeyDisjointReaders_NoCrossTalk)
+{
+    /* Control test (disjoint reader model): 8 readers run HEAVY verify
+     * against a page with hikey + 5 ascending-key data tuples.  No
+     * writer.  Expected: zero errors — readers must not interfere with
+     * each other's cache lines, registry state, or verifier scratch. */
+    RegisterIndexPageVerifier();
+    ScopedVerifyConfig guard;
+    DSTORE::ut_dfx::EnableAllModules();
+    SetDfxVerifyLevel(VerifyLevel::HEAVY);
+
+    const uint16 tupleSize = 32;
+    PageBuffer buf{};
+    BtrPage *page = MakeValidIndexPage(buf, {204, 205});
+    AddIndexTuple(page, BTREE_PAGE_HIKEY, tupleSize, 0);
+    for (int i = 0; i < 5; ++i) {
+        OffsetNumber off = static_cast<OffsetNumber>(BTREE_PAGE_HIKEY + 1 + i);
+        AddIndexTuple(page, off, tupleSize, 0);
+        SetTupleKeyBytes(page, off, tupleSize, static_cast<unsigned char>(0x10 * (i + 1)));
+    }
+    page->GetLinkAndStatus()->SetRight(INVALID_PAGE_ID);
+    page->SetChecksum();
+
+    std::atomic<int> ready{0};
+    std::atomic<uint64> errorCount{0};
+
+    std::vector<std::thread> workers;
+    for (int w = 0; w < CONCURRENT_WORKERS; ++w) {
+        workers.emplace_back([&]() {
+            ready.fetch_add(1, std::memory_order_acq_rel);
+            while (ready.load(std::memory_order_acquire) < CONCURRENT_WORKERS) {
+                std::this_thread::yield();
+            }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+
+            for (int i = 0; i < CONCURRENT_LOOPS; ++i) {
+                VerifyReport r;
+                (void)VerifyPage(page, VerifyLevel::HEAVY, &r);
+                if (r.HasError()) {
+                    errorCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+    for (auto &t : workers) t.join();
+
+    EXPECT_EQ(errorCount.load(), 0u)
+        << "concurrent read-only HEAVY verify should produce zero errors";
 }
