@@ -1,5 +1,7 @@
 #include <array>
+#include <atomic>
 #include <memory>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -563,4 +565,546 @@ TEST(UTBtreeVerify, OnlineInvisibleTupleIsSkipped)
 
     EXPECT_EQ(verifier.Verify(), DSTORE_SUCC) << report.FormatText();
     EXPECT_FALSE(report.HasError()) << report.FormatText();
+}
+
+TEST(UTBtreeVerify, SiblingCycleDetected)
+{
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leftLeafBuffer{};
+    PageBuffer rightLeafBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {68, 1}, 1, true);
+    BtrPage *leftLeaf = InitIndexPage(leftLeafBuffer, {68, 2}, 0, false);
+    BtrPage *rightLeaf = InitIndexPage(rightLeafBuffer, {68, 3}, 0, false);
+
+    /* Normal forward link: left -> right */
+    leftLeaf->GetLinkAndStatus()->SetRight(rightLeaf->GetSelfPageId());
+    /* Cycle: right -> left (instead of INVALID_PAGE_ID) */
+    rightLeaf->GetLinkAndStatus()->SetRight(leftLeaf->GetSelfPageId());
+    /* Normal backward link */
+    rightLeaf->GetLinkAndStatus()->SetLeft(leftLeaf->GetSelfPageId());
+
+    AddTuple(leftLeaf, MakeHighKeyTuple(10), BTREE_PAGE_HIKEY);
+    AddTuple(leftLeaf, MakeLeafTuple(1, {{18, 1}, 1}), BTREE_PAGE_FIRSTKEY);
+    AddTuple(rightLeaf, MakeLeafTuple(12, {{18, 2}, 1}), BTREE_PAGE_HIKEY);
+
+    AddTuple(rootPage, MakePivotTuple(10, leftLeaf->GetSelfPageId()), BTREE_PAGE_HIKEY);
+    AddTuple(rootPage, MakePivotTuple(12, rightLeaf->GetSelfPageId()), BTREE_PAGE_FIRSTKEY);
+
+    FakeBtreeVerifyPageSource pageSource;
+    pageSource.SetRoot(rootPage->GetSelfPageId(), 1);
+    pageSource.SetIndexInfo(indexInfo.get());
+    pageSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+    pageSource.AddPage(leftLeaf->GetSelfPageId(), leftLeaf);
+    pageSource.AddPage(rightLeaf->GetSelfPageId(), rightLeaf);
+
+    BtreeVerifyOptions options;
+    options.isOnline = false;
+    VerifyReport report;
+    VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+    BtreeVerifier verifier(&pageSource, options, &context);
+
+    EXPECT_EQ(verifier.Verify(), DSTORE_FAIL);
+    EXPECT_TRUE(report.HasError());
+
+    /* Verify the specific cycle-detection check name appears in the report */
+    const std::string reportText = report.FormatText();
+    EXPECT_NE(reportText.find("btree_sibling_cycle"), std::string::npos)
+        << "Expected 'btree_sibling_cycle' in report, got: " << reportText;
+}
+
+TEST(UTBtreeVerify, SiblingSelfCycleDetected)
+{
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leafBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {69, 1}, 1, true);
+    BtrPage *leafPage = InitIndexPage(leafBuffer, {69, 2}, 0, false);
+
+    /* Self-cycle: leaf points right to itself */
+    leafPage->GetLinkAndStatus()->SetRight(leafPage->GetSelfPageId());
+
+    AddTuple(leafPage, MakeLeafTuple(1, {{19, 1}, 1}), BTREE_PAGE_HIKEY);
+    AddTuple(rootPage, MakePivotTuple(2, leafPage->GetSelfPageId()), BTREE_PAGE_HIKEY);
+
+    FakeBtreeVerifyPageSource pageSource;
+    pageSource.SetRoot(rootPage->GetSelfPageId(), 1);
+    pageSource.SetIndexInfo(indexInfo.get());
+    pageSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+    pageSource.AddPage(leafPage->GetSelfPageId(), leafPage);
+
+    BtreeVerifyOptions options;
+    options.isOnline = false;
+    VerifyReport report;
+    VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+    BtreeVerifier verifier(&pageSource, options, &context);
+
+    EXPECT_EQ(verifier.Verify(), DSTORE_FAIL);
+    EXPECT_TRUE(report.HasError());
+    const std::string reportText = report.FormatText();
+    EXPECT_NE(reportText.find("btree_sibling_cycle"), std::string::npos)
+        << "Expected 'btree_sibling_cycle' in report, got: " << reportText;
+}
+
+TEST(UTBtreeVerify, SiblingThreeNodeCycleDetected)
+{
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leafABuffer{};
+    PageBuffer leafBBuffer{};
+    PageBuffer leafCBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {70, 1}, 1, true);
+    BtrPage *leafA = InitIndexPage(leafABuffer, {70, 2}, 0, false);
+    BtrPage *leafB = InitIndexPage(leafBBuffer, {70, 3}, 0, false);
+    BtrPage *leafC = InitIndexPage(leafCBuffer, {70, 4}, 0, false);
+
+    /* 3-node cycle: A -> B -> C -> A */
+    leafA->GetLinkAndStatus()->SetRight(leafB->GetSelfPageId());
+    leafB->GetLinkAndStatus()->SetLeft(leafA->GetSelfPageId());
+    leafB->GetLinkAndStatus()->SetRight(leafC->GetSelfPageId());
+    leafC->GetLinkAndStatus()->SetLeft(leafB->GetSelfPageId());
+    leafC->GetLinkAndStatus()->SetRight(leafA->GetSelfPageId());
+
+    AddTuple(leafA, MakeHighKeyTuple(10), BTREE_PAGE_HIKEY);
+    AddTuple(leafA, MakeLeafTuple(1, {{20, 1}, 1}), BTREE_PAGE_FIRSTKEY);
+    AddTuple(leafB, MakeHighKeyTuple(20), BTREE_PAGE_HIKEY);
+    AddTuple(leafB, MakeLeafTuple(12, {{20, 2}, 1}), BTREE_PAGE_FIRSTKEY);
+    AddTuple(leafC, MakeLeafTuple(22, {{20, 3}, 1}), BTREE_PAGE_HIKEY);
+
+    AddTuple(rootPage, MakePivotTuple(10, leafA->GetSelfPageId()), BTREE_PAGE_HIKEY);
+    AddTuple(rootPage, MakePivotTuple(12, leafB->GetSelfPageId()), OffsetNumberNext(BTREE_PAGE_HIKEY));
+    AddTuple(rootPage, MakePivotTuple(22, leafC->GetSelfPageId()), BTREE_PAGE_FIRSTKEY);
+
+    FakeBtreeVerifyPageSource pageSource;
+    pageSource.SetRoot(rootPage->GetSelfPageId(), 1);
+    pageSource.SetIndexInfo(indexInfo.get());
+    pageSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+    pageSource.AddPage(leafA->GetSelfPageId(), leafA);
+    pageSource.AddPage(leafB->GetSelfPageId(), leafB);
+    pageSource.AddPage(leafC->GetSelfPageId(), leafC);
+
+    BtreeVerifyOptions options;
+    options.isOnline = false;
+    VerifyReport report;
+    VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+    BtreeVerifier verifier(&pageSource, options, &context);
+
+    EXPECT_EQ(verifier.Verify(), DSTORE_FAIL);
+    EXPECT_TRUE(report.HasError());
+    const std::string reportText = report.FormatText();
+    EXPECT_NE(reportText.find("btree_sibling_cycle"), std::string::npos)
+        << "Expected 'btree_sibling_cycle' in report, got: " << reportText;
+}
+
+TEST(UTBtreeVerify, SplitIncompleteRightLinkFollowed)
+{
+    /* B-link §7.1: leaf marked SPLIT_INCOMPLETE means parent downlink for right
+     * sibling is not yet installed, but the right-link MUST still be followable
+     * by readers (core B-link invariant). Verifier should emit a WARNING and
+     * continue traversal — not fail. */
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leftLeafBuffer{};
+    PageBuffer rightLeafBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {72, 1}, 1, true);
+    BtrPage *leftLeaf = InitIndexPage(leftLeafBuffer, {72, 2}, 0, false);
+    BtrPage *rightLeaf = InitIndexPage(rightLeafBuffer, {72, 3}, 0, false);
+
+    leftLeaf->GetLinkAndStatus()->SetRight(rightLeaf->GetSelfPageId());
+    rightLeaf->GetLinkAndStatus()->SetLeft(leftLeaf->GetSelfPageId());
+    /* Mark left leaf as mid-split: downlink for rightLeaf not yet in parent. */
+    leftLeaf->GetLinkAndStatus()->SetSplitStatus(BtrPageSplitStatus::SPLIT_INCOMPLETE);
+
+    AddTuple(leftLeaf, MakeHighKeyTuple(10), BTREE_PAGE_HIKEY);
+    AddTuple(leftLeaf, MakeLeafTuple(1, {{22, 1}, 1}), BTREE_PAGE_FIRSTKEY);
+    AddTuple(rightLeaf, MakeLeafTuple(12, {{22, 2}, 1}), BTREE_PAGE_HIKEY);
+    /* Parent only knows the left leaf so far — matches SPLIT_INCOMPLETE semantics. */
+    AddTuple(rootPage, MakePivotTuple(10, leftLeaf->GetSelfPageId()), BTREE_PAGE_HIKEY);
+
+    FakeBtreeVerifyPageSource pageSource;
+    pageSource.SetRoot(rootPage->GetSelfPageId(), 1);
+    pageSource.SetIndexInfo(indexInfo.get());
+    pageSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+    pageSource.AddPage(leftLeaf->GetSelfPageId(), leftLeaf);
+    pageSource.AddPage(rightLeaf->GetSelfPageId(), rightLeaf);
+
+    BtreeVerifyOptions options;
+    options.isOnline = false;
+    options.checkHeapConsistency = false;
+    VerifyReport report;
+    VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+    BtreeVerifier verifier(&pageSource, options, &context);
+
+    EXPECT_EQ(verifier.Verify(), DSTORE_SUCC) << report.FormatText();
+    EXPECT_FALSE(report.HasError()) << report.FormatText();
+    EXPECT_GT(report.GetWarningCount(), 0u) << "SPLIT_INCOMPLETE should surface as WARNING";
+    const std::string reportText = report.FormatText();
+    EXPECT_NE(reportText.find("btree_split_incomplete"), std::string::npos)
+        << "Expected 'btree_split_incomplete' warning, got: " << reportText;
+}
+
+TEST(UTBtreeVerify, ParentDownlinkMissingFails)
+{
+    /* Parent internal node has a downlink to a leaf page that is absent from
+     * the page source — simulates a dangling downlink (e.g. reclaimed child
+     * page whose slot in parent was not removed). Verifier must fail via
+     * btree_child_read_failed. */
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leafBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {73, 1}, 1, true);
+    BtrPage *leafPage = InitIndexPage(leafBuffer, {73, 2}, 0, false);
+    const PageId ghostChildId{73, 3};
+
+    AddTuple(leafPage, MakeLeafTuple(1, {{23, 1}, 1}), BTREE_PAGE_HIKEY);
+    /* Parent claims two children but only one actually exists in the source. */
+    AddTuple(rootPage, MakePivotTuple(1, leafPage->GetSelfPageId()), BTREE_PAGE_HIKEY);
+    AddTuple(rootPage, MakePivotTuple(99, ghostChildId), BTREE_PAGE_FIRSTKEY);
+
+    FakeBtreeVerifyPageSource pageSource;
+    pageSource.SetRoot(rootPage->GetSelfPageId(), 1);
+    pageSource.SetIndexInfo(indexInfo.get());
+    pageSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+    pageSource.AddPage(leafPage->GetSelfPageId(), leafPage);
+    /* ghostChildId intentionally NOT added. */
+
+    VerifyReport report;
+    VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+    BtreeVerifier verifier(&pageSource, BtreeVerifyOptions{}, &context);
+
+    EXPECT_EQ(verifier.Verify(), DSTORE_FAIL);
+    EXPECT_TRUE(report.HasError());
+    const std::string reportText = report.FormatText();
+    EXPECT_NE(reportText.find("btree_child_read_failed"), std::string::npos)
+        << "Expected 'btree_child_read_failed' in report, got: " << reportText;
+}
+
+TEST(UTBtreeVerify, RightSiblingReclaimedMidTraverseReturnsError)
+{
+    /* Right-link points to a page that has been reclaimed (no longer
+     * addressable by the page source). Verifier must not crash and must
+     * report btree_page_read_failed at leaf-level traversal. */
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leafBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {74, 1}, 1, true);
+    BtrPage *leafPage = InitIndexPage(leafBuffer, {74, 2}, 0, false);
+    const PageId reclaimedSiblingId{74, 99};
+
+    /* Leaf claims a right sibling that no longer exists — simulates the sibling
+     * being recycled (UndoZone / recycleMinCsn §7.2 scenario) before traversal
+     * reaches it. */
+    leafPage->GetLinkAndStatus()->SetRight(reclaimedSiblingId);
+    AddTuple(leafPage, MakeHighKeyTuple(10), BTREE_PAGE_HIKEY);
+    AddTuple(leafPage, MakeLeafTuple(1, {{24, 1}, 1}), BTREE_PAGE_FIRSTKEY);
+    AddTuple(rootPage, MakePivotTuple(10, leafPage->GetSelfPageId()), BTREE_PAGE_HIKEY);
+
+    FakeBtreeVerifyPageSource pageSource;
+    pageSource.SetRoot(rootPage->GetSelfPageId(), 1);
+    pageSource.SetIndexInfo(indexInfo.get());
+    pageSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+    pageSource.AddPage(leafPage->GetSelfPageId(), leafPage);
+
+    BtreeVerifyOptions options;
+    options.checkHeapConsistency = false;
+    VerifyReport report;
+    VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+    BtreeVerifier verifier(&pageSource, options, &context);
+
+    EXPECT_EQ(verifier.Verify(), DSTORE_FAIL);
+    EXPECT_TRUE(report.HasError());
+    const std::string reportText = report.FormatText();
+    EXPECT_NE(reportText.find("btree_page_read_failed"), std::string::npos)
+        << "Expected 'btree_page_read_failed' in report, got: " << reportText;
+}
+
+TEST(UTBtreeVerify, Concurrent_GcRecyclingDuringRead_NeverCrashes)
+{
+    /* Concurrent invariant: a background GC thread flaps the right-link of a
+     * leaf between INVALID_PAGE_ID (page is rightmost) and a reclaimed sibling
+     * id (absent from source). Multiple verifier threads race against the
+     * mutator. Either outcome is acceptable per-run:
+     *   - verify succeeds with zero errors (saw INVALID_PAGE_ID), OR
+     *   - verify fails with btree_page_read_failed (saw reclaimed id).
+     * The only forbidden outcomes are: crash/abort, FATAL severity, or any
+     * other error code (would indicate torn-read corruption escaping past
+     * defensive checks). */
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leafBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {75, 1}, 1, true);
+    BtrPage *leafPage = InitIndexPage(leafBuffer, {75, 2}, 0, false);
+    const PageId reclaimedSiblingId{75, 99};
+
+    AddTuple(leafPage, MakeHighKeyTuple(10), BTREE_PAGE_HIKEY);
+    AddTuple(leafPage, MakeLeafTuple(1, {{25, 1}, 1}), BTREE_PAGE_FIRSTKEY);
+    AddTuple(rootPage, MakePivotTuple(10, leafPage->GetSelfPageId()), BTREE_PAGE_HIKEY);
+
+    BtrPageLinkAndStatus *leafLink = leafPage->GetLinkAndStatus();
+
+    constexpr int kVerifierWorkers = 4;
+    constexpr int kLoops = 200;
+
+    std::atomic<bool> stopMutator{false};
+    std::atomic<int> readyCount{0};
+    std::atomic<int> okCount{0};
+    std::atomic<int> expectedErrorCount{0};
+    std::atomic<int> forbiddenErrorCount{0};
+    std::atomic<int> fatalCount{0};
+
+    std::thread mutator([&]() {
+        readyCount.fetch_add(1, std::memory_order_acq_rel);
+        while (readyCount.load(std::memory_order_acquire) < kVerifierWorkers + 1) {
+            std::this_thread::yield();
+        }
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+
+        uint64 iter = 0;
+        while (!stopMutator.load(std::memory_order_acquire)) {
+            leafLink->SetRight((iter & 1) ? reclaimedSiblingId : INVALID_PAGE_ID);
+            ++iter;
+            if ((iter & 0x3FF) == 0) {
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    std::vector<std::thread> verifiers;
+    for (int w = 0; w < kVerifierWorkers; ++w) {
+        verifiers.emplace_back([&]() {
+            readyCount.fetch_add(1, std::memory_order_acq_rel);
+            while (readyCount.load(std::memory_order_acquire) < kVerifierWorkers + 1) {
+                std::this_thread::yield();
+            }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+
+            for (int i = 0; i < kLoops; ++i) {
+                /* Each iteration builds a fresh local source — FakeBtreeVerifyPageSource
+                 * is not thread-safe (internal unordered_map), and sharing it across
+                 * verifier threads would race on lookup state. The mutated BtrPage is
+                 * the shared point of contention we actually want to stress. */
+                FakeBtreeVerifyPageSource localSource;
+                localSource.SetRoot(rootPage->GetSelfPageId(), 1);
+                localSource.SetIndexInfo(indexInfo.get());
+                localSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+                localSource.AddPage(leafPage->GetSelfPageId(), leafPage);
+
+                BtreeVerifyOptions options;
+                options.checkHeapConsistency = false;
+                VerifyReport report;
+                VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+                BtreeVerifier verifier(&localSource, options, &context);
+                const RetStatus status = verifier.Verify();
+
+                if (report.HasFatal()) {
+                    fatalCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (status == DSTORE_SUCC) {
+                    if (report.HasError()) {
+                        forbiddenErrorCount.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        okCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                } else {
+                    const std::string text = report.FormatText();
+                    if (text.find("btree_page_read_failed") != std::string::npos) {
+                        expectedErrorCount.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        forbiddenErrorCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            }
+        });
+    }
+
+    for (auto &t : verifiers) t.join();
+    stopMutator.store(true, std::memory_order_release);
+    mutator.join();
+
+    EXPECT_EQ(fatalCount.load(), 0) << "verifier escalated to FATAL during concurrent GC flap";
+    EXPECT_EQ(forbiddenErrorCount.load(), 0)
+        << "verifier surfaced an unexpected error kind during concurrent GC flap";
+    EXPECT_GT(okCount.load() + expectedErrorCount.load(), 0)
+        << "no verifier iterations observed either outcome — barrier may be broken";
+}
+
+TEST(UTBtreeVerify, Concurrent_SplitStatFlap_MutatorInvariant)
+{
+    /* splitStat is a 2-bit bitfield toggled by concurrent inserters as the
+     * B-link split protocol progresses. Verifier must treat any splitStat
+     * value as benign (WARNING at most) and NEVER report an ERROR or FATAL —
+     * otherwise background verify would spuriously fail during normal
+     * concurrent DML. */
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootBuffer{};
+    PageBuffer leafBuffer{};
+    BtrPage *rootPage = InitIndexPage(rootBuffer, {76, 1}, 1, true);
+    BtrPage *leafPage = InitIndexPage(leafBuffer, {76, 2}, 0, false);
+
+    AddTuple(leafPage, MakeLeafTuple(1, {{26, 1}, 1}), BTREE_PAGE_HIKEY);
+    AddTuple(rootPage, MakePivotTuple(1, leafPage->GetSelfPageId()), BTREE_PAGE_HIKEY);
+
+    BtrPageLinkAndStatus *leafLink = leafPage->GetLinkAndStatus();
+
+    constexpr int kVerifierWorkers = 4;
+    constexpr int kLoops = 300;
+
+    std::atomic<bool> stopMutator{false};
+    std::atomic<int> readyCount{0};
+    std::atomic<int> errorCount{0};
+    std::atomic<int> fatalCount{0};
+    std::atomic<int> successCount{0};
+
+    std::thread mutator([&]() {
+        readyCount.fetch_add(1, std::memory_order_acq_rel);
+        while (readyCount.load(std::memory_order_acquire) < kVerifierWorkers + 1) {
+            std::this_thread::yield();
+        }
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+
+        uint64 iter = 0;
+        while (!stopMutator.load(std::memory_order_acquire)) {
+            leafLink->SetSplitStatus((iter & 1) ? BtrPageSplitStatus::SPLIT_INCOMPLETE
+                                                : BtrPageSplitStatus::SPLIT_COMPLETE);
+            ++iter;
+            if ((iter & 0x3FF) == 0) {
+                std::this_thread::yield();
+            }
+        }
+    });
+
+    std::vector<std::thread> verifiers;
+    for (int w = 0; w < kVerifierWorkers; ++w) {
+        verifiers.emplace_back([&]() {
+            readyCount.fetch_add(1, std::memory_order_acq_rel);
+            while (readyCount.load(std::memory_order_acquire) < kVerifierWorkers + 1) {
+                std::this_thread::yield();
+            }
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+
+            for (int i = 0; i < kLoops; ++i) {
+                /* Each iteration builds a fresh local source — FakeBtreeVerifyPageSource
+                 * is not thread-safe (internal unordered_map), and sharing it across
+                 * verifier threads would race on lookup state. The mutated BtrPage is
+                 * the shared point of contention we actually want to stress. */
+                FakeBtreeVerifyPageSource localSource;
+                localSource.SetRoot(rootPage->GetSelfPageId(), 1);
+                localSource.SetIndexInfo(indexInfo.get());
+                localSource.AddPage(rootPage->GetSelfPageId(), rootPage);
+                localSource.AddPage(leafPage->GetSelfPageId(), leafPage);
+
+                BtreeVerifyOptions options;
+                options.checkHeapConsistency = false;
+                VerifyReport report;
+                VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+                BtreeVerifier verifier(&localSource, options, &context);
+                const RetStatus status = verifier.Verify();
+
+                if (report.HasFatal()) {
+                    fatalCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (report.HasError()) {
+                    errorCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (status == DSTORE_SUCC) {
+                    successCount.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+    }
+
+    for (auto &t : verifiers) t.join();
+    stopMutator.store(true, std::memory_order_release);
+    mutator.join();
+
+    EXPECT_EQ(errorCount.load(), 0)
+        << "splitStat flap must never surface as ERROR — B-link invariant violated";
+    EXPECT_EQ(fatalCount.load(), 0) << "splitStat flap must never escalate to FATAL";
+    EXPECT_EQ(successCount.load(), kVerifierWorkers * kLoops)
+        << "every verify iteration must return DSTORE_SUCC regardless of splitStat";
+}
+
+TEST(UTBtreeVerify, InternalNodeSiblingCycleDetected)
+{
+    ScopedMemoryContext memoryContext;
+    RegisterIndexPageVerifier();
+
+    auto indexInfo = std::unique_ptr<IndexInfo, void (*)(IndexInfo *)>(CreateSingleInt4IndexInfo(),
+        [](IndexInfo *info) { if (info != nullptr) { info->Free(); } });
+
+    PageBuffer rootABuffer{};
+    PageBuffer rootBBuffer{};
+    PageBuffer leafBuffer{};
+    BtrPage *rootA = InitIndexPage(rootABuffer, {71, 1}, 1, false);
+    BtrPage *rootB = InitIndexPage(rootBBuffer, {71, 2}, 1, false);
+    BtrPage *leafPage = InitIndexPage(leafBuffer, {71, 3}, 0, true);
+
+    /* Internal nodes with cycle: rootA -> rootB -> rootA */
+    rootA->GetLinkAndStatus()->SetRight(rootB->GetSelfPageId());
+    rootB->GetLinkAndStatus()->SetLeft(rootA->GetSelfPageId());
+    rootB->GetLinkAndStatus()->SetRight(rootA->GetSelfPageId());
+
+    AddTuple(leafPage, MakeLeafTuple(1, {{21, 1}, 1}), BTREE_PAGE_HIKEY);
+    AddTuple(rootA, MakeHighKeyTuple(10), BTREE_PAGE_HIKEY);
+    AddTuple(rootA, MakePivotTuple(1, leafPage->GetSelfPageId()), BTREE_PAGE_FIRSTKEY);
+    AddTuple(rootB, MakePivotTuple(11, leafPage->GetSelfPageId()), BTREE_PAGE_HIKEY);
+
+    FakeBtreeVerifyPageSource pageSource;
+    pageSource.SetRoot(rootA->GetSelfPageId(), 1);
+    pageSource.SetIndexInfo(indexInfo.get());
+    pageSource.AddPage(rootA->GetSelfPageId(), rootA);
+    pageSource.AddPage(rootB->GetSelfPageId(), rootB);
+    pageSource.AddPage(leafPage->GetSelfPageId(), leafPage);
+
+    BtreeVerifyOptions options;
+    options.isOnline = false;
+    VerifyReport report;
+    VerifyContext context(&report, nullptr, 1.0F, false, 1000);
+    BtreeVerifier verifier(&pageSource, options, &context);
+
+    EXPECT_EQ(verifier.Verify(), DSTORE_FAIL);
+    EXPECT_TRUE(report.HasError());
+    const std::string reportText = report.FormatText();
+    EXPECT_NE(reportText.find("btree_sibling_cycle"), std::string::npos)
+        << "Expected 'btree_sibling_cycle' in report, got: " << reportText;
 }
