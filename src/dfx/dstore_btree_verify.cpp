@@ -190,23 +190,25 @@ RetStatus BtreeVerifier::Verify()
     PageId rootPageId = INVALID_PAGE_ID;
     uint32 rootLevel = 0;
     if (!m_pageSource->GetRootInfo(&rootPageId, &rootLevel)) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, INVALID_PAGE_ID, "btree_root_missing", 1, 0,
-            "Failed to resolve btree root page");
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_META_ROOT_INVALID, INVALID_PAGE_ID,
+            "btree_root_missing", 1, 0, "Failed to resolve btree root page");
         return DSTORE_FAIL;
     }
 
     IndexInfo *indexInfo = m_pageSource->GetIndexInfo();
     if (indexInfo == nullptr) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, rootPageId, "btree_index_info_missing", 1, 0,
-            "Failed to resolve btree index metadata for root page (%hu,%u)", rootPageId.m_fileId, rootPageId.m_blockId);
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_META_ROOT_INVALID, rootPageId,
+            "btree_index_info_missing", 1, 0, "Failed to resolve btree index metadata for root page (%hu,%u)",
+            rootPageId.m_fileId, rootPageId.m_blockId);
         return DSTORE_FAIL;
     }
 
     for (int32 level = static_cast<int32>(rootLevel); level >= 0; --level) {
         const PageId leftmostPageId = DescendToLevel(rootPageId, rootLevel, static_cast<uint32>(level));
         if (!leftmostPageId.IsValid()) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, rootPageId, "btree_leftmost_resolution_failed", rootLevel,
-                static_cast<uint64>(level), "Failed to resolve leftmost page at level %d", level);
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_META_ROOT_INVALID, rootPageId,
+                "btree_leftmost_resolution_failed", rootLevel, static_cast<uint64>(level),
+                "Failed to resolve leftmost page at level %d", level);
             return DSTORE_FAIL;
         }
 
@@ -226,7 +228,8 @@ RetStatus BtreeVerifier::VerifyLevel(const PageId &leftmostPageId, uint32 target
 
     while (currentPageId.IsValid()) {
         if (!m_context->VisitPage(currentPageId)) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, currentPageId, "btree_sibling_cycle", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_SIBLING_LINK_CYCLE, currentPageId,
+                "btree_sibling_cycle", 1, 0,
                 "Detected sibling cycle while scanning level %u starting from (%hu,%u)",
                 targetLevel, leftmostPageId.m_fileId, leftmostPageId.m_blockId);
             return DSTORE_FAIL;
@@ -235,7 +238,8 @@ RetStatus BtreeVerifier::VerifyLevel(const PageId &leftmostPageId, uint32 target
         BufferDesc *bufferDesc = INVALID_BUFFER_DESC;
         BtrPage *page = m_pageSource->ReadBtreePage(currentPageId, &bufferDesc);
         if (page == nullptr) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, currentPageId, "btree_page_read_failed", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_PAGE_READ_FAILED, currentPageId,
+                "btree_page_read_failed", 1, 0,
                 "Failed to read btree page (%hu,%u)", currentPageId.m_fileId, currentPageId.m_blockId);
             return DSTORE_FAIL;
         }
@@ -289,7 +293,8 @@ RetStatus BtreeVerifier::VerifyLeafTupleConsistency(BtrPage *page, IndexInfo *in
         heapTupleDesc = m_pageSource->GetHeapTupleDesc();
         Int32Vector *indexKeyMap = m_pageSource->GetIndexKeyMap();
         if (heapTupleDesc == nullptr || indexKeyMap == nullptr) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_heap_metadata_missing", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::INDEX_HEAP_POINTER_INVALID,
+                page->GetSelfPageId(), "btree_heap_metadata_missing", 1, 0,
                 "Heap tuple descriptor or index key map is unavailable for page (%hu,%u)",
                 page->GetFileId(), page->GetBlockNum());
             return DSTORE_FAIL;
@@ -317,7 +322,8 @@ RetStatus BtreeVerifier::VerifySingleLeafTuple(
 {
     const ItemPointerData heapCtid = tuple->GetHeapCtid();
     if (heapCtid == INVALID_ITEM_POINTER) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_heap_ctid_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::INDEX_HEAP_POINTER_INVALID,
+            page->GetSelfPageId(), "btree_heap_ctid_missing", 1, 0,
             "Leaf tuple at offset %hu on page (%hu,%u) has invalid heap ctid", offset,
             page->GetFileId(), page->GetBlockNum());
         return DSTORE_FAIL;
@@ -328,7 +334,8 @@ RetStatus BtreeVerifier::VerifySingleLeafTuple(
         HeapTuple *invisibleTuple = m_pageSource->FetchHeapTuple(heapCtid, false);
         if (invisibleTuple != nullptr) {
             m_pageSource->ReleaseHeapTuple(invisibleTuple);
-            ReportResult(VerifySeverity::SEVERITY_INFO, page->GetSelfPageId(), "btree_heap_visibility_skipped", 0, 1,
+            ReportResult(VerifySeverity::SEVERITY_INFO, VerifyCode::OK, page->GetSelfPageId(),
+                "btree_heap_visibility_skipped", 0, 1,
                 "Skipped leaf tuple at offset %hu on page (%hu,%u) because heap tuple (%hu,%u,%hu) is not visible online",
                 offset, page->GetFileId(), page->GetBlockNum(), heapCtid.GetFileId(), heapCtid.GetBlockNum(),
                 heapCtid.GetOffset());
@@ -337,7 +344,8 @@ RetStatus BtreeVerifier::VerifySingleLeafTuple(
     }
 
     if (heapTuple == nullptr) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_heap_tuple_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::INDEX_HEAP_TUPLE_MISSING,
+            page->GetSelfPageId(), "btree_heap_tuple_missing", 1, 0,
             "Leaf tuple at offset %hu on page (%hu,%u) points to missing heap tuple (%hu,%u,%hu)",
             offset, page->GetFileId(), page->GetBlockNum(), heapCtid.GetFileId(), heapCtid.GetBlockNum(),
             heapCtid.GetOffset());
@@ -363,15 +371,17 @@ RetStatus BtreeVerifier::VerifyLeafTupleDataConsistency(IndexTuple *indexTuple, 
 
     for (uint16 attr = 0; attr < indexInfo->indexKeyAttrsNum; ++attr) {
         if (attr >= static_cast<uint16>(indexKeyMap->dim1)) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "btree_index_key_map_short", indexInfo->indexKeyAttrsNum,
-                indexKeyMap->dim1, "Index key map for page (%hu,%u) is shorter than index key count",
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::INDEX_HEAP_DATA_MISMATCH, pageId,
+                "btree_index_key_map_short", indexInfo->indexKeyAttrsNum, indexKeyMap->dim1,
+                "Index key map for page (%hu,%u) is shorter than index key count",
                 pageId.m_fileId, pageId.m_blockId);
             return DSTORE_FAIL;
         }
 
         const int16 heapAttNum = indexKeyMap->values[attr];
         if (heapAttNum <= 0) {
-            ReportResult(VerifySeverity::SEVERITY_INFO, pageId, "btree_index_expression_skipped", 0, 1,
+            ReportResult(VerifySeverity::SEVERITY_INFO, VerifyCode::OK, pageId,
+                "btree_index_expression_skipped", 0, 1,
                 "Skipped data consistency for expression-based index attr %hu on page (%hu,%u)",
                 static_cast<uint16>(attr + 1), pageId.m_fileId, pageId.m_blockId);
             continue;
@@ -382,7 +392,8 @@ RetStatus BtreeVerifier::VerifyLeafTupleDataConsistency(IndexTuple *indexTuple, 
         const Datum indexDatum = indexTuple->GetAttr(attr + 1, indexInfo->attributes, &isIndexNull);
         const Datum heapDatum = heapTuple->GetAttr(heapAttNum, heapTupleDesc, &isHeapNull);
         if (CompareIndexDatum(indexDatum, isIndexNull, heapDatum, isHeapNull, indexInfo, attr) != 0) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, pageId, "btree_index_heap_value_mismatch", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::INDEX_HEAP_DATA_MISMATCH, pageId,
+                "btree_index_heap_value_mismatch", 1, 0,
                 "Leaf tuple at offset %hu on page (%hu,%u) mismatches heap tuple attr %hd for index attr %hu",
                 offset, pageId.m_fileId, pageId.m_blockId, heapAttNum, static_cast<uint16>(attr + 1));
             return DSTORE_FAIL;
@@ -401,22 +412,24 @@ RetStatus BtreeVerifier::VerifyPageStructure(BtrPage *page, uint32 expectedLevel
 
     BtrPageLinkAndStatus *link = page->GetLinkAndStatus();
     if (link == nullptr) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_link_header_missing", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_PAGE_READ_FAILED, page->GetSelfPageId(),
+            "btree_link_header_missing", 1, 0,
             "Page (%hu,%u) is missing btree link metadata", page->GetFileId(), page->GetBlockNum());
         return DSTORE_FAIL;
     }
 
     if (page->GetLevel() != expectedLevel) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_level_mismatch", expectedLevel,
-            page->GetLevel(), "Page (%hu,%u) level %u != expected level %u", page->GetFileId(), page->GetBlockNum(),
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_LEVEL_INCONSISTENT, page->GetSelfPageId(),
+            "btree_level_mismatch", expectedLevel, page->GetLevel(),
+            "Page (%hu,%u) level %u != expected level %u", page->GetFileId(), page->GetBlockNum(),
             page->GetLevel(), expectedLevel);
         return DSTORE_FAIL;
     }
 
     const BtrPageType expectedType = expectedLevel == 0 ? BtrPageType::LEAF_PAGE : BtrPageType::INTERNAL_PAGE;
     if (!link->TestType(expectedType)) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_page_type_mismatch",
-            static_cast<uint64>(expectedType), link->GetType(),
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_LEVEL_INCONSISTENT, page->GetSelfPageId(),
+            "btree_page_type_mismatch", static_cast<uint64>(expectedType), link->GetType(),
             "Page (%hu,%u) type %hu does not match expected btree type for level %u",
             page->GetFileId(), page->GetBlockNum(), link->GetType(), expectedLevel);
         return DSTORE_FAIL;
@@ -424,21 +437,24 @@ RetStatus BtreeVerifier::VerifyPageStructure(BtrPage *page, uint32 expectedLevel
 
     if (previousPageId.IsValid()) {
         if (page->GetLeft() != previousPageId) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_left_sibling_mismatch", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_SIBLING_LINK_BROKEN,
+                page->GetSelfPageId(), "btree_left_sibling_mismatch", 1, 0,
                 "Page (%hu,%u) left sibling (%hu,%u) does not match previous page (%hu,%u)",
                 page->GetFileId(), page->GetBlockNum(), page->GetLeft().m_fileId, page->GetLeft().m_blockId,
                 previousPageId.m_fileId, previousPageId.m_blockId);
             return DSTORE_FAIL;
         }
     } else if (!page->IsLeftmost()) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_leftmost_invariant_broken", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_SIBLING_LINK_BROKEN,
+            page->GetSelfPageId(), "btree_leftmost_invariant_broken", 1, 0,
             "Level leftmost page (%hu,%u) unexpectedly has a left sibling (%hu,%u)", page->GetFileId(),
             page->GetBlockNum(), page->GetLeft().m_fileId, page->GetLeft().m_blockId);
         return DSTORE_FAIL;
     }
 
     if (!link->IsSplitComplete()) {
-        ReportResult(VerifySeverity::SEVERITY_WARNING, page->GetSelfPageId(), "btree_split_incomplete", 0, 1,
+        ReportResult(VerifySeverity::SEVERITY_WARNING, VerifyCode::BTR_SIBLING_LINK_BROKEN,
+            page->GetSelfPageId(), "btree_split_incomplete", 0, 1,
             "Page (%hu,%u) is marked split-incomplete during btree verification", page->GetFileId(),
             page->GetBlockNum());
     }
@@ -454,7 +470,8 @@ RetStatus BtreeVerifier::VerifyPageKeyOrdering(
     if (!page->IsRightmost()) {
         const ItemId *highKeyItemId = page->GetItemIdPtr(BTREE_PAGE_HIKEY);
         if (!IsComparableItem(highKeyItemId)) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_high_key_missing", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_HIGHKEY_VIOLATION,
+                page->GetSelfPageId(), "btree_high_key_missing", 1, 0,
                 "Non-rightmost page (%hu,%u) is missing a valid high key at offset %u",
                 page->GetFileId(), page->GetBlockNum(), BTREE_PAGE_HIKEY);
             return DSTORE_FAIL;
@@ -475,14 +492,16 @@ RetStatus BtreeVerifier::VerifyPageKeyOrdering(
         *lastTuple = tuple;
 
         if (previousTuple != nullptr && CompareTupleKeys(previousTuple, tuple, indexInfo, true) > 0) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_intra_page_order_violation", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_KEY_ORDER_VIOLATION,
+                page->GetSelfPageId(), "btree_intra_page_order_violation", 1, 0,
                 "Tuple ordering is not monotonic on page (%hu,%u) between offsets %hu and %hu", page->GetFileId(),
                 page->GetBlockNum(), static_cast<uint16>(offset - 1), offset);
             return DSTORE_FAIL;
         }
 
         if (highKey != nullptr && CompareTupleKeys(tuple, highKey, indexInfo, false) > 0) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_high_key_violation", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_HIGHKEY_VIOLATION,
+                page->GetSelfPageId(), "btree_high_key_violation", 1, 0,
                 "Tuple at offset %hu exceeds high key on page (%hu,%u)", offset, page->GetFileId(),
                 page->GetBlockNum());
             return DSTORE_FAIL;
@@ -502,7 +521,8 @@ RetStatus BtreeVerifier::VerifyCrossPageOrdering(const PageId &leftPageId, Index
     }
 
     if (CompareTupleKeys(leftLastTuple, rightFirstTuple, indexInfo, true) > 0) {
-        ReportResult(VerifySeverity::SEVERITY_ERROR, rightPageId, "btree_cross_page_order_violation", 1, 0,
+        ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_KEY_ORDER_VIOLATION, rightPageId,
+            "btree_cross_page_order_violation", 1, 0,
             "Sibling pages (%hu,%u) and (%hu,%u) are out of order at the page boundary",
             leftPageId.m_fileId, leftPageId.m_blockId, rightPageId.m_fileId, rightPageId.m_blockId);
         return DSTORE_FAIL;
@@ -524,7 +544,8 @@ RetStatus BtreeVerifier::VerifyParentChildConsistency(BtrPage *page, IndexInfo *
         BufferDesc *childBuffer = INVALID_BUFFER_DESC;
         BtrPage *childPage = m_pageSource->ReadBtreePage(childPageId, &childBuffer);
         if (childPage == nullptr) {
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_child_read_failed", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_PAGE_READ_FAILED,
+                page->GetSelfPageId(), "btree_child_read_failed", 1, 0,
                 "Failed to read child page (%hu,%u) referenced from page (%hu,%u) offset %hu",
                 childPageId.m_fileId, childPageId.m_blockId, page->GetFileId(), page->GetBlockNum(), offset);
             return DSTORE_FAIL;
@@ -532,8 +553,9 @@ RetStatus BtreeVerifier::VerifyParentChildConsistency(BtrPage *page, IndexInfo *
 
         if (childPage->GetLevel() + 1 != page->GetLevel()) {
             m_pageSource->ReleaseBtreePage(childBuffer);
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_parent_child_level_mismatch",
-                page->GetLevel() - 1, childPage->GetLevel(),
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_PARENT_CHILD_MISMATCH,
+                page->GetSelfPageId(), "btree_parent_child_level_mismatch", page->GetLevel() - 1,
+                childPage->GetLevel(),
                 "Child page (%hu,%u) level %u does not match parent (%hu,%u) level %u",
                 childPageId.m_fileId, childPageId.m_blockId, childPage->GetLevel(), page->GetFileId(),
                 page->GetBlockNum(), page->GetLevel());
@@ -558,7 +580,8 @@ RetStatus BtreeVerifier::VerifyParentChildConsistency(BtrPage *page, IndexInfo *
 
         if (childBoundary == nullptr || CompareTupleKeys(parentTuple, childBoundary, indexInfo, false) != 0) {
             m_pageSource->ReleaseBtreePage(childBuffer);
-            ReportResult(VerifySeverity::SEVERITY_ERROR, page->GetSelfPageId(), "btree_parent_child_key_mismatch", 1, 0,
+            ReportResult(VerifySeverity::SEVERITY_ERROR, VerifyCode::BTR_PARENT_CHILD_MISMATCH,
+                page->GetSelfPageId(), "btree_parent_child_key_mismatch", 1, 0,
                 "Parent page (%hu,%u) offset %hu does not match child page (%hu,%u) boundary tuple",
                 page->GetFileId(), page->GetBlockNum(), offset, childPageId.m_fileId, childPageId.m_blockId);
             return DSTORE_FAIL;
@@ -597,8 +620,8 @@ PageId BtreeVerifier::DescendToLevel(const PageId &rootPageId, uint32 rootLevel,
     return currentLevel == targetLevel ? currentPageId : INVALID_PAGE_ID;
 }
 
-void BtreeVerifier::ReportResult(VerifySeverity severity, const PageId &pageId, const char *checkName, uint64 expected,
-    uint64 actual, const char *format, ...)
+void BtreeVerifier::ReportResult(VerifySeverity severity, VerifyCode code, const PageId &pageId, const char *checkName,
+    uint64 expected, uint64 actual, const char *format, ...)
 {
     if (m_context == nullptr || m_context->GetReport() == nullptr) {
         return;
@@ -610,7 +633,8 @@ void BtreeVerifier::ReportResult(VerifySeverity severity, const PageId &pageId, 
     (void)vsnprintf(detail, sizeof(detail), format, args);
     va_end(args);
 
-    m_context->GetReport()->AddResult(severity, BTREE_VERIFY_TARGET, pageId, checkName, expected, actual, "%s", detail);
+    m_context->GetReport()->AddResultWithCode(severity, code, BTREE_VERIFY_TARGET, pageId, checkName, expected, actual,
+        "%s", detail);
 }
 
 bool BtreeVerifier::IsComparableItem(const ItemId *itemId)

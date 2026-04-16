@@ -60,8 +60,8 @@ private:
     PageId DescendToLevel(const PageId &rootPageId, uint32 rootLevel, uint32 targetLevel);
     bool ShouldSamplePage(const PageId &pageId) const;
 
-    void ReportResult(VerifySeverity severity, const PageId &pageId, const char *checkName, uint64 expected,
-        uint64 actual, const char *format, ...) __attribute__((format(printf, 7, 8)));
+    void ReportResult(VerifySeverity severity, VerifyCode code, const PageId &pageId, const char *checkName,
+        uint64 expected, uint64 actual, const char *format, ...) __attribute__((format(printf, 8, 9)));
 
     static bool IsComparableItem(const ItemId *itemId);
     static int CompareTupleKeys(IndexTuple *left, IndexTuple *right, IndexInfo *indexInfo, bool compareHeapTids);
