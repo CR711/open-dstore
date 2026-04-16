@@ -71,6 +71,19 @@ RetStatus VerifyDataSegmentMetaLightweight(const Page *page, VerifyLevel level, 
     return VerifySegmentMetaLightweightCommon(metaPage, segType, report);
 }
 
+RetStatus VerifyDataSegmentMetaMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const DataSegmentMetaPage *metaPage = static_cast<const DataSegmentMetaPage *>(page);
+
+    if (metaPage->GetExtentCount() == 0) {
+        return ReportSegmentError(report, metaPage, "segment_meta_extent_count_invalid", 1, 0,
+            "Data segment meta page must own at least one extent", VerifyCode::SEG_EXT_SIZE_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyDataSegmentMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -115,6 +128,20 @@ RetStatus VerifyHeapSegmentMetaLightweight(const Page *page, VerifyLevel level, 
     return VerifySegmentMetaLightweightCommon(metaPage, segType, report);
 }
 
+RetStatus VerifyHeapSegmentMetaMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const HeapSegmentMetaPage *metaPage = static_cast<const HeapSegmentMetaPage *>(page);
+
+    if (metaPage->numFsms > MAX_FSM_TREE_PER_RELATION) {
+        return ReportSegmentError(report, metaPage, "heap_segment_meta_num_fsms_invalid", MAX_FSM_TREE_PER_RELATION,
+            metaPage->numFsms, "Heap segment meta page FSM count exceeds the supported maximum",
+            VerifyCode::HEAP_FSM_SLOT_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyHeapSegmentMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -150,6 +177,19 @@ RetStatus VerifyUndoSegmentMetaLightweight(const Page *page, VerifyLevel level, 
         SegmentType::UNDO_SEGMENT_TYPE, report);
 }
 
+RetStatus VerifyUndoSegmentMetaMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const UndoSegmentMetaPage *metaPage = static_cast<const UndoSegmentMetaPage *>(page);
+
+    if (metaPage->GetExtentCount() == 0) {
+        return ReportSegmentError(report, metaPage, "undo_segment_meta_extent_count_invalid", 1, 0,
+            "Undo segment meta page must own at least one extent", VerifyCode::SEG_EXT_SIZE_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyUndoSegmentMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -175,11 +215,14 @@ RetStatus VerifyUndoSegmentMetaHeavyweight(const Page *page, VerifyLevel level, 
 void RegisterSegmentPageVerifiers()
 {
     (void)RegisterPageVerifier(PageType::DATA_SEGMENT_META_PAGE_TYPE, "DataSegmentMetaPage",
-        VerifyModule::SEGMENT, VerifyDataSegmentMetaLightweight, nullptr, VerifyDataSegmentMetaHeavyweight);
+        VerifyModule::SEGMENT, VerifyDataSegmentMetaLightweight, VerifyDataSegmentMetaMediumweight,
+        VerifyDataSegmentMetaHeavyweight);
     (void)RegisterPageVerifier(PageType::HEAP_SEGMENT_META_PAGE_TYPE, "HeapSegmentMetaPage",
-        VerifyModule::HEAP, VerifyHeapSegmentMetaLightweight, nullptr, VerifyHeapSegmentMetaHeavyweight);
+        VerifyModule::HEAP, VerifyHeapSegmentMetaLightweight, VerifyHeapSegmentMetaMediumweight,
+        VerifyHeapSegmentMetaHeavyweight);
     (void)RegisterPageVerifier(PageType::UNDO_SEGMENT_META_PAGE_TYPE, "UndoSegmentMetaPage",
-        VerifyModule::UNDO, VerifyUndoSegmentMetaLightweight, nullptr, VerifyUndoSegmentMetaHeavyweight);
+        VerifyModule::UNDO, VerifyUndoSegmentMetaLightweight, VerifyUndoSegmentMetaMediumweight,
+        VerifyUndoSegmentMetaHeavyweight);
 }
 
 }  // namespace DSTORE

@@ -58,6 +58,8 @@ private:
 
 RetStatus VerifyHeapSegment(BufMgrInterface *bufMgr, StorageRelation heapRel, const HeapVerifyOptions &options,
     VerifyReport *report);
+RetStatus VerifyHeapSegment(BufMgrInterface *bufMgr, StorageRelation heapRel, const HeapVerifyOptions &options,
+    VerifyContext *context);
 
 }  // namespace DSTORE
 

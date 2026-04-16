@@ -1,7 +1,5 @@
 #include "dfx/dstore_verify_context.h"
 
-#include <cstdlib>
-
 namespace DSTORE {
 
 VerifyContext::VerifyContext(
@@ -50,7 +48,7 @@ float VerifyContext::GetSampleRatio() const
     return m_sampleRatio;
 }
 
-bool VerifyContext::ShouldSamplePage() const
+bool VerifyContext::ShouldSamplePage(const PageId &pageId) const
 {
     if (m_sampleRatio >= 1.0f) {
         return true;
@@ -58,7 +56,9 @@ bool VerifyContext::ShouldSamplePage() const
     if (m_sampleRatio <= 0.0f) {
         return false;
     }
-    return (static_cast<float>(rand()) / RAND_MAX) < m_sampleRatio;
+    const uint64 hashValue = (static_cast<uint64>(pageId.m_fileId) << 32) ^
+        (static_cast<uint64>(pageId.m_blockId) * 2654435761ULL);
+    return hashValue % 10000 < static_cast<uint64>(m_sampleRatio * 10000);
 }
 
 void VerifyContext::ResetVisitedPages()

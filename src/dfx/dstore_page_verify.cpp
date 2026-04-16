@@ -86,6 +86,28 @@ RetStatus VerifyRelationSegment(
     return VerifySegment(bufMgr, segmentMetaPageId, options, report);
 }
 
+RetStatus VerifyRelationSegment(
+    BufMgrInterface *bufMgr, StorageRelation relation, const SegmentVerifyOptions &options, VerifyContext *context)
+{
+    if (bufMgr == nullptr || relation == nullptr || context == nullptr) {
+        return DSTORE_FAIL;
+    }
+
+    PageId segmentMetaPageId = INVALID_PAGE_ID;
+    if (relation->tableSmgr != nullptr) {
+        segmentMetaPageId = relation->tableSmgr->GetSegMetaPageId();
+    } else if (relation->btreeSmgr != nullptr) {
+        segmentMetaPageId = relation->btreeSmgr->GetSegMetaPageId();
+    }
+
+    if (!segmentMetaPageId.IsValid()) {
+        context->GetReport()->AddResult(VerifySeverity::SEVERITY_ERROR, "segment", INVALID_PAGE_ID,
+            "segment_meta_missing", 1, 0, "Relation does not have a valid segment meta page");
+        return DSTORE_FAIL;
+    }
+    return VerifySegment(bufMgr, segmentMetaPageId, options, context);
+}
+
 }  // namespace
 
 /*
@@ -467,6 +489,14 @@ RetStatus VerifyTable(StorageRelation heapRel, const TableVerifyOptions &options
         return DSTORE_FAIL;
     }
 
+    /*
+     * 创建共享 VerifyContext，所有跨页子阶段（segment/heap/btree/metadata）共享同一个
+     * visitedPages 集合，保证跨阶段环检测一致性。每阶段开始前 ResetVisitedPages()
+     * 避免不同语义域的页面互相干扰。
+     */
+    VerifyContext context(report, options.btreeOptions.snapshot, options.btreeOptions.sampleRatio,
+        options.btreeOptions.isOnline, options.btreeOptions.maxErrors);
+
     RetStatus overallStatus = DSTORE_SUCC;
     const PdbId pdbId = heapRel->m_pdbId;
 
@@ -481,16 +511,19 @@ RetStatus VerifyTable(StorageRelation heapRel, const TableVerifyOptions &options
         }
     }
 
+    context.ResetVisitedPages();
     if (options.checkSegment) {
         overallStatus = MergeRetStatus(
-            overallStatus, VerifyRelationSegment(bufMgr, heapRel, options.segmentOptions, report));
+            overallStatus, VerifyRelationSegment(bufMgr, heapRel, options.segmentOptions, &context));
     }
 
+    context.ResetVisitedPages();
     if (options.checkHeap) {
         overallStatus = MergeRetStatus(
-            overallStatus, VerifyHeapSegment(bufMgr, heapRel, options.heapOptions, report));
+            overallStatus, VerifyHeapSegment(bufMgr, heapRel, options.heapOptions, &context));
     }
 
+    context.ResetVisitedPages();
     for (StorageRelation indexRel : options.indexRelations) {
         if (indexRel == nullptr) {
             continue;
@@ -501,17 +534,18 @@ RetStatus VerifyTable(StorageRelation heapRel, const TableVerifyOptions &options
         }
         if (options.checkSegment) {
             overallStatus = MergeRetStatus(
-                overallStatus, VerifyRelationSegment(bufMgr, indexRel, options.segmentOptions, report));
+                overallStatus, VerifyRelationSegment(bufMgr, indexRel, options.segmentOptions, &context));
         }
         if (options.checkBtree) {
             overallStatus = MergeRetStatus(
-                overallStatus, VerifyBtreeIndex(indexRel, heapRel, options.btreeOptions, report));
+                overallStatus, VerifyBtreeIndex(indexRel, heapRel, options.btreeOptions, &context));
         }
     }
 
+    context.ResetVisitedPages();
     if (options.checkMetadata && options.metadata != nullptr) {
         overallStatus = MergeRetStatus(
-            overallStatus, VerifyMetadataConsistency(bufMgr, *options.metadata, report));
+            overallStatus, VerifyMetadataConsistency(bufMgr, *options.metadata, &context));
     }
 
     return report->HasError() ? DSTORE_FAIL : overallStatus;

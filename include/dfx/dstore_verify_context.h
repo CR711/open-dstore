@@ -21,7 +21,7 @@ public:
     /* 采样支持 */
     void SetSampleRatio(float ratio);
     float GetSampleRatio() const;
-    bool ShouldSamplePage() const;
+    bool ShouldSamplePage(const PageId &pageId) const;
 
     /* 环检测 */
     bool VisitPage(const PageId &pageId);

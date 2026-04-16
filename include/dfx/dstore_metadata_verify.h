@@ -59,6 +59,8 @@ private:
 
 RetStatus VerifyMetadataConsistency(
     BufMgrInterface *bufMgr, const MetadataInputStruct &input, VerifyReport *report);
+RetStatus VerifyMetadataConsistency(
+    BufMgrInterface *bufMgr, const MetadataInputStruct &input, VerifyContext *context);
 
 }  // namespace DSTORE
 

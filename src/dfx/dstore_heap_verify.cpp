@@ -469,4 +469,16 @@ RetStatus VerifyHeapSegment(
     return verifier.Verify();
 }
 
+RetStatus VerifyHeapSegment(
+    BufMgrInterface *bufMgr, StorageRelation heapRel, const HeapVerifyOptions &options, VerifyContext *context)
+{
+    if (bufMgr == nullptr || heapRel == nullptr || context == nullptr) {
+        return DSTORE_FAIL;
+    }
+
+    RelationHeapVerifyPageSource pageSource(bufMgr, heapRel);
+    HeapSegmentVerifier verifier(&pageSource, options, context);
+    return verifier.Verify();
+}
+
 }  // namespace DSTORE

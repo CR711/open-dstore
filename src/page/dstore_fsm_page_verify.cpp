@@ -43,6 +43,20 @@ RetStatus VerifyFsmMetaPageLightweight(const Page *page, VerifyLevel level, Veri
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyFsmMetaPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const FreeSpaceMapMetaPage *fsmMetaPage = static_cast<const FreeSpaceMapMetaPage *>(page);
+
+    if (fsmMetaPage->GetNumTotalPages() < fsmMetaPage->GetNumUsedPages()) {
+        return ReportFsmError(report, fsmMetaPage, "fsm_meta_page_count_invalid", fsmMetaPage->GetNumUsedPages(),
+            fsmMetaPage->GetNumTotalPages(), "FSM meta page used page count exceeds total page count",
+            VerifyCode::PAGE_BOUNDARY_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyFsmMetaPageHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -98,6 +112,14 @@ RetStatus VerifyFsmPageLightweight(const Page *page, VerifyLevel level, VerifyRe
             "FSM page upper slot is invalid", VerifyCode::PAGE_BOUNDARY_INVALID);
     }
 
+    return DSTORE_SUCC;
+}
+
+RetStatus VerifyFsmPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    (void)page;
+    (void)report;
     return DSTORE_SUCC;
 }
 
@@ -174,10 +196,11 @@ RetStatus VerifyFsmPageHeavyweight(const Page *page, VerifyLevel level, VerifyRe
 void RegisterFsmPageVerifiers()
 {
     (void)RegisterPageVerifier(
-        PageType::FSM_PAGE_TYPE, "FsmPage", VerifyModule::FSM, VerifyFsmPageLightweight, nullptr, VerifyFsmPageHeavyweight);
+        PageType::FSM_PAGE_TYPE, "FsmPage", VerifyModule::FSM,
+        VerifyFsmPageLightweight, VerifyFsmPageMediumweight, VerifyFsmPageHeavyweight);
     (void)RegisterPageVerifier(
         PageType::FSM_META_PAGE_TYPE, "FsmMetaPage", VerifyModule::FSM,
-        VerifyFsmMetaPageLightweight, nullptr, VerifyFsmMetaPageHeavyweight);
+        VerifyFsmMetaPageLightweight, VerifyFsmMetaPageMediumweight, VerifyFsmMetaPageHeavyweight);
 }
 
 }  // namespace DSTORE

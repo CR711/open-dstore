@@ -73,6 +73,8 @@ private:
 
 RetStatus VerifyBtreeIndex(StorageRelation indexRel, StorageRelation heapRel, const BtreeVerifyOptions &options,
     VerifyReport *report);
+RetStatus VerifyBtreeIndex(StorageRelation indexRel, StorageRelation heapRel, const BtreeVerifyOptions &options,
+    VerifyContext *context);
 
 }  // namespace DSTORE
 

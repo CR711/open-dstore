@@ -54,6 +54,14 @@ RetStatus VerifyTbsExtentMetaLightweight(const Page *page, VerifyLevel level, Ve
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyTbsExtentMetaMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)page;
+    (void)level;
+    (void)report;
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyTbsExtentMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)page;
@@ -73,6 +81,14 @@ RetStatus VerifyTbsBitmapPageLightweight(const Page *page, VerifyLevel level, Ve
             VerifyCode::BITMAP_ALLOCATED_CNT_MISMATCH);
     }
 
+    return DSTORE_SUCC;
+}
+
+RetStatus VerifyTbsBitmapPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)page;
+    (void)level;
+    (void)report;
     return DSTORE_SUCC;
 }
 
@@ -106,6 +122,26 @@ RetStatus VerifyTbsBitmapMetaPageLightweight(const Page *page, VerifyLevel level
     if (bitmapMetaPage->bitmapPagesPerGroup != BITMAP_PAGES_PER_GROUP) {
         return ReportTbsError(report, bitmapMetaPage, "tbs_bitmap_meta_pages_per_group_invalid", BITMAP_PAGES_PER_GROUP,
             bitmapMetaPage->bitmapPagesPerGroup, "Tablespace bitmap meta page bitmapPagesPerGroup is inconsistent",
+            VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
+RetStatus VerifyTbsBitmapMetaPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const TbsBitmapMetaPage *bitmapMetaPage = static_cast<const TbsBitmapMetaPage *>(page);
+
+    if (bitmapMetaPage->groupCount > MAX_BITMAP_GROUP_CNT) {
+        return ReportTbsError(report, bitmapMetaPage, "tbs_bitmap_meta_group_count_invalid", MAX_BITMAP_GROUP_CNT,
+            bitmapMetaPage->groupCount, "Tablespace bitmap meta page group count exceeds maximum",
+            VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID);
+    }
+
+    if (bitmapMetaPage->idleGroupHints > bitmapMetaPage->groupCount) {
+        return ReportTbsError(report, bitmapMetaPage, "tbs_bitmap_meta_idle_hint_invalid", bitmapMetaPage->groupCount,
+            bitmapMetaPage->idleGroupHints, "Tablespace bitmap meta page idle group hint exceeds group count",
             VerifyCode::BITMAP_META_EXTENT_SIZE_INVALID);
     }
 
@@ -154,6 +190,20 @@ RetStatus VerifyTbsFileMetaPageLightweight(const Page *page, VerifyLevel level, 
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyTbsFileMetaPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const TbsFileMetaPage *fileMetaPage = static_cast<const TbsFileMetaPage *>(page);
+
+    if (fileMetaPage->oid < FIRST_BOOTSTRAP_OBJECT_ID) {
+        return ReportTbsError(report, fileMetaPage, "tbs_file_meta_oid_invalid", FIRST_BOOTSTRAP_OBJECT_ID,
+            fileMetaPage->oid, "Tablespace file meta page oid is below the bootstrap object id",
+            VerifyCode::FILE_BLOCK_ID_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyTbsFileMetaPageHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -181,6 +231,14 @@ RetStatus VerifyTbsSpaceMetaPageLightweight(const Page *page, VerifyLevel level,
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyTbsSpaceMetaPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)page;
+    (void)level;
+    (void)report;
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyTbsSpaceMetaPageHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)page;
@@ -194,15 +252,20 @@ RetStatus VerifyTbsSpaceMetaPageHeavyweight(const Page *page, VerifyLevel level,
 void RegisterTablespacePageVerifiers()
 {
     (void)RegisterPageVerifier(PageType::TBS_EXTENT_META_PAGE_TYPE, "TbsExtentMetaPage",
-        VerifyModule::SEGMENT, VerifyTbsExtentMetaLightweight, nullptr, VerifyTbsExtentMetaHeavyweight);
+        VerifyModule::SEGMENT, VerifyTbsExtentMetaLightweight, VerifyTbsExtentMetaMediumweight,
+        VerifyTbsExtentMetaHeavyweight);
     (void)RegisterPageVerifier(PageType::TBS_BITMAP_PAGE_TYPE, "TbsBitmapPage",
-        VerifyModule::SEGMENT, VerifyTbsBitmapPageLightweight, nullptr, VerifyTbsBitmapPageHeavyweight);
+        VerifyModule::SEGMENT, VerifyTbsBitmapPageLightweight, VerifyTbsBitmapPageMediumweight,
+        VerifyTbsBitmapPageHeavyweight);
     (void)RegisterPageVerifier(PageType::TBS_BITMAP_META_PAGE_TYPE, "TbsBitmapMetaPage",
-        VerifyModule::SEGMENT, VerifyTbsBitmapMetaPageLightweight, nullptr, VerifyTbsBitmapMetaPageHeavyweight);
+        VerifyModule::SEGMENT, VerifyTbsBitmapMetaPageLightweight, VerifyTbsBitmapMetaPageMediumweight,
+        VerifyTbsBitmapMetaPageHeavyweight);
     (void)RegisterPageVerifier(PageType::TBS_FILE_META_PAGE_TYPE, "TbsFileMetaPage",
-        VerifyModule::SEGMENT, VerifyTbsFileMetaPageLightweight, nullptr, VerifyTbsFileMetaPageHeavyweight);
+        VerifyModule::SEGMENT, VerifyTbsFileMetaPageLightweight, VerifyTbsFileMetaPageMediumweight,
+        VerifyTbsFileMetaPageHeavyweight);
     (void)RegisterPageVerifier(PageType::TBS_SPACE_META_PAGE_TYPE, "TbsSpaceMetaPage",
-        VerifyModule::SEGMENT, VerifyTbsSpaceMetaPageLightweight, nullptr, VerifyTbsSpaceMetaPageHeavyweight);
+        VerifyModule::SEGMENT, VerifyTbsSpaceMetaPageLightweight, VerifyTbsSpaceMetaPageMediumweight,
+        VerifyTbsSpaceMetaPageHeavyweight);
 }
 
 }  // namespace DSTORE

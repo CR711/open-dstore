@@ -610,4 +610,17 @@ RetStatus VerifySegment(
     return verifier.Verify();
 }
 
+RetStatus VerifySegment(
+    BufMgrInterface *bufMgr, const PageId &segmentMetaPageId, const SegmentVerifyOptions &options,
+    VerifyContext *context)
+{
+    if (bufMgr == nullptr || context == nullptr || !segmentMetaPageId.IsValid()) {
+        return DSTORE_FAIL;
+    }
+
+    BufferSegmentVerifyPageSource pageSource(bufMgr);
+    SegmentVerifier verifier(&pageSource, segmentMetaPageId, options, context);
+    return verifier.Verify();
+}
+
 }  // namespace DSTORE

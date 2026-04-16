@@ -74,6 +74,8 @@ private:
 
 RetStatus VerifySegment(BufMgrInterface *bufMgr, const PageId &segmentMetaPageId, const SegmentVerifyOptions &options,
     VerifyReport *report);
+RetStatus VerifySegment(BufMgrInterface *bufMgr, const PageId &segmentMetaPageId, const SegmentVerifyOptions &options,
+    VerifyContext *context);
 
 }  // namespace DSTORE
 

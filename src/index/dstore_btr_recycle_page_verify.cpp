@@ -52,6 +52,29 @@ RetStatus VerifyBtrQueuePageLightweight(const Page *page, VerifyLevel level, Ver
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyBtrQueuePageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const BtrQueuePage *queuePage = static_cast<const BtrQueuePage *>(page);
+
+    const BtrQueuePageMeta *meta = GetQueuePageMeta(queuePage);
+    if (meta->GetType() == BtrRecycleQueueType::RECYCLE) {
+        const RecyclablePageQueue *queue = queuePage->GetQueue<RecyclablePageQueue>();
+        if (queue != nullptr && queue->GetSize() > queue->GetCapacity()) {
+            return ReportBtrRecycleError(report, queuePage, "btr_recycle_queue_size_invalid", queue->GetCapacity(),
+                queue->GetSize(), "Btree recycle queue page size exceeds queue capacity", VerifyCode::BTR_QUEUE_INCONSISTENT);
+        }
+    } else {
+        const ReusablePageQueue *queue = queuePage->GetQueue<ReusablePageQueue>();
+        if (queue != nullptr && queue->GetSize() > queue->GetCapacity()) {
+            return ReportBtrRecycleError(report, queuePage, "btr_free_queue_size_invalid", queue->GetCapacity(),
+                queue->GetSize(), "Btree free queue page size exceeds queue capacity", VerifyCode::BTR_QUEUE_INCONSISTENT);
+        }
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyBtrQueuePageHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -102,6 +125,19 @@ RetStatus VerifyBtrRecyclePartitionMetaLightweight(const Page *page, VerifyLevel
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyBtrRecyclePartitionMetaMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const BtrRecyclePartitionMetaPage *metaPage = static_cast<const BtrRecyclePartitionMetaPage *>(page);
+
+    if (metaPage->accessTimestamp == 0) {
+        return ReportBtrRecycleError(report, metaPage, "btr_recycle_partition_timestamp_invalid", 1, 0,
+            "Btree recycle partition meta page access timestamp must be initialized", VerifyCode::PAGE_BOUNDARY_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyBtrRecyclePartitionMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -134,6 +170,22 @@ RetStatus VerifyBtrRecycleRootMetaLightweight(const Page *page, VerifyLevel leve
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyBtrRecycleRootMetaMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const BtrRecycleRootMetaPage *metaPage = static_cast<const BtrRecycleRootMetaPage *>(page);
+
+    for (uint16 i = 0; i < MAX_BTR_RECYCLE_PARTITION; ++i) {
+        const PageId partMetaPageId = metaPage->GetRecyclePartitionMetaPageId(i);
+        if (partMetaPageId == metaPage->GetSelfPageId()) {
+            return ReportBtrRecycleError(report, metaPage, "btr_recycle_root_partition_self_link_invalid", 0, i + 1,
+                "Btree recycle root meta page partition entry must not point to itself", VerifyCode::PAGE_ID_INVALID);
+        }
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyBtrRecycleRootMetaHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -157,11 +209,14 @@ RetStatus VerifyBtrRecycleRootMetaHeavyweight(const Page *page, VerifyLevel leve
 void RegisterBtrRecyclePageVerifiers()
 {
     (void)RegisterPageVerifier(PageType::BTR_QUEUE_PAGE_TYPE, "BtrQueuePage",
-        VerifyModule::INDEX, VerifyBtrQueuePageLightweight, nullptr, VerifyBtrQueuePageHeavyweight);
+        VerifyModule::INDEX, VerifyBtrQueuePageLightweight, VerifyBtrQueuePageMediumweight,
+        VerifyBtrQueuePageHeavyweight);
     (void)RegisterPageVerifier(PageType::BTR_RECYCLE_PARTITION_META_PAGE_TYPE, "BtrRecyclePartitionMetaPage",
-        VerifyModule::INDEX, VerifyBtrRecyclePartitionMetaLightweight, nullptr, VerifyBtrRecyclePartitionMetaHeavyweight);
+        VerifyModule::INDEX, VerifyBtrRecyclePartitionMetaLightweight, VerifyBtrRecyclePartitionMetaMediumweight,
+        VerifyBtrRecyclePartitionMetaHeavyweight);
     (void)RegisterPageVerifier(PageType::BTR_RECYCLE_ROOT_META_PAGE_TYPE, "BtrRecycleRootMetaPage",
-        VerifyModule::INDEX, VerifyBtrRecycleRootMetaLightweight, nullptr, VerifyBtrRecycleRootMetaHeavyweight);
+        VerifyModule::INDEX, VerifyBtrRecycleRootMetaLightweight, VerifyBtrRecycleRootMetaMediumweight,
+        VerifyBtrRecycleRootMetaHeavyweight);
 }
 
 }  // namespace DSTORE

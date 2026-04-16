@@ -659,19 +659,10 @@ int BtreeVerifier::CompareTupleKeys(IndexTuple *left, IndexTuple *right, IndexIn
 
 bool BtreeVerifier::ShouldSamplePage(const PageId &pageId) const
 {
-    const float sampleRatio = m_context == nullptr ? 1.0F : m_context->GetSampleRatio();
-    if (sampleRatio >= 1.0F) {
+    if (m_context == nullptr) {
         return true;
     }
-    if (sampleRatio <= 0.0F) {
-        return false;
-    }
-
-    const uint64 hashValue = (static_cast<uint64>(pageId.m_fileId) << 32) ^
-        (static_cast<uint64>(pageId.m_blockId) * 2654435761U);
-    constexpr uint64 HASH_SCALE = 1000000;
-    const double normalized = static_cast<double>(hashValue % HASH_SCALE) / static_cast<double>(HASH_SCALE);
-    return normalized < static_cast<double>(sampleRatio);
+    return m_context->ShouldSamplePage(pageId);
 }
 
 RetStatus VerifyBtreeIndex(StorageRelation indexRel, StorageRelation heapRel, const BtreeVerifyOptions &options,
@@ -684,6 +675,18 @@ RetStatus VerifyBtreeIndex(StorageRelation indexRel, StorageRelation heapRel, co
     VerifyContext context(report, options.snapshot, options.sampleRatio, options.isOnline, options.maxErrors);
     RelationBtreeVerifyPageSource pageSource(indexRel, heapRel, options);
     BtreeVerifier verifier(&pageSource, options, &context);
+    return verifier.Verify();
+}
+
+RetStatus VerifyBtreeIndex(StorageRelation indexRel, StorageRelation heapRel, const BtreeVerifyOptions &options,
+    VerifyContext *context)
+{
+    if (indexRel == nullptr || context == nullptr) {
+        return DSTORE_FAIL;
+    }
+
+    RelationBtreeVerifyPageSource pageSource(indexRel, heapRel, options);
+    BtreeVerifier verifier(&pageSource, options, context);
     return verifier.Verify();
 }
 

@@ -62,6 +62,20 @@ RetStatus VerifyUndoRecordPageLightweight(const Page *page, VerifyLevel level, V
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyUndoRecordPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const UndoRecordPage *undoPage = static_cast<const UndoRecordPage *>(page);
+
+    if (undoPage->m_undoRecPageHeader.prev == undoPage->GetSelfPageId() ||
+        undoPage->m_undoRecPageHeader.next == undoPage->GetSelfPageId()) {
+        return ReportUndoError(report, undoPage, "undo_page_link_self_reference", 0, 1,
+            "Undo record page prev/next link must not point to itself", VerifyCode::PAGE_ID_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyUndoRecordPageHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -132,6 +146,22 @@ RetStatus VerifyTransactionSlotPageLightweight(const Page *page, VerifyLevel lev
     return DSTORE_SUCC;
 }
 
+RetStatus VerifyTransactionSlotPageMediumweight(const Page *page, VerifyLevel level, VerifyReport *report)
+{
+    (void)level;
+    const TransactionSlotPage *slotPage = static_cast<const TransactionSlotPage *>(page);
+
+    if (slotPage->GetNextFreeLogicSlotId() > static_cast<uint64>(TRX_PAGE_SLOTS_NUM) + slotPage->GetBlockNum() *
+        static_cast<uint64>(TRX_PAGE_SLOTS_NUM)) {
+        return ReportUndoError(report, slotPage, "txn_slot_page_next_logic_slot_invalid",
+            static_cast<uint64>(TRX_PAGE_SLOTS_NUM) + slotPage->GetBlockNum() * static_cast<uint64>(TRX_PAGE_SLOTS_NUM),
+            slotPage->GetNextFreeLogicSlotId(),
+            "Transaction slot page next free logic slot id exceeds local page range", VerifyCode::UNDO_SLOT_STATE_INVALID);
+    }
+
+    return DSTORE_SUCC;
+}
+
 RetStatus VerifyTransactionSlotPageHeavyweight(const Page *page, VerifyLevel level, VerifyReport *report)
 {
     (void)level;
@@ -171,9 +201,10 @@ void RegisterUndoPageVerifiers()
 {
     (void)RegisterPageVerifier(
         PageType::UNDO_PAGE_TYPE, "UndoRecordPage", VerifyModule::UNDO,
-        VerifyUndoRecordPageLightweight, nullptr, VerifyUndoRecordPageHeavyweight);
+        VerifyUndoRecordPageLightweight, VerifyUndoRecordPageMediumweight, VerifyUndoRecordPageHeavyweight);
     (void)RegisterPageVerifier(PageType::TRANSACTION_SLOT_PAGE, "TransactionSlotPage",
-        VerifyModule::UNDO, VerifyTransactionSlotPageLightweight, nullptr, VerifyTransactionSlotPageHeavyweight);
+        VerifyModule::UNDO, VerifyTransactionSlotPageLightweight, VerifyTransactionSlotPageMediumweight,
+        VerifyTransactionSlotPageHeavyweight);
 }
 
 }  // namespace DSTORE

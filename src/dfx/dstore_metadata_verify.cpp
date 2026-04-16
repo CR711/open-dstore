@@ -271,4 +271,15 @@ RetStatus VerifyMetadataConsistency(BufMgrInterface *bufMgr, const MetadataInput
     return verifier.Verify();
 }
 
+RetStatus VerifyMetadataConsistency(BufMgrInterface *bufMgr, const MetadataInputStruct &input, VerifyContext *context)
+{
+    if (bufMgr == nullptr || context == nullptr) {
+        return DSTORE_FAIL;
+    }
+
+    BufferMetadataVerifyPageSource pageSource(bufMgr, input.pdbId);
+    MetadataVerifier verifier(&pageSource, input, context);
+    return verifier.Verify();
+}
+
 }  // namespace DSTORE
